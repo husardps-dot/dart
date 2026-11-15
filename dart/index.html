@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dart – licznik punktów</title>
+<meta name="theme-color" content="#111314">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dart Social">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1 class="logo"><img src="icons/logo.png" alt="Dart Social"></h1>
+    <div class="row">
+      <span class="small" id="modeInfo"></span>
+      <button class="btn" id="btnPlayers">👤 Zawodnicy</button>
+      <button class="btn" id="btnRank">🏆 Ranking</button>
+      <button class="btn" id="btnFull" title="Pełny ekran">⛶</button>
+      <button class="btn" id="btnNew" style="display:none">Nowa gra</button>
+    </div>
+  </div>
+
+  <!-- SETUP -->
+  <div id="setup" class="card" style="max-width:520px">
+    <label class="lbl" style="margin-top:0">Gracze</label>
+    <div class="plist" id="plist"></div>
+    <form class="row" id="addForm" style="margin-top:8px">
+      <input type="text" id="pname" placeholder="Imię gracza (wpisz lub wybierz)" maxlength="20" autocomplete="off" list="pnames"><datalist id="pnames"></datalist>
+      <button class="btn" type="submit">Dodaj</button>
+    </form>
+    <div id="known" class="chips"></div>
+    <label class="lbl">Punkty startowe</label>
+    <div class="row" id="startOpts"></div>
+    <label class="lbl">Kończenie</label>
+    <div class="row" id="outOpts"></div>
+    <div style="margin-top:20px"><button class="btn primary" id="btnStart" style="width:100%;padding:14px">Zaczynamy</button></div>
+    <p class="small" id="setupErr"></p>
+  </div>
+
+  <!-- GAME -->
+  <div id="game" class="game" style="display:none">
+    <div class="players" id="players"></div>
+    <div class="card turn" id="turnCard">
+      <div class="who" id="who"></div>
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div class="big" id="remain"></div>
+        <div style="text-align:right"><div class="small">w tej turze</div><div class="disp" style="font-size:30px" id="turnSum">0</div></div>
+      </div>
+      <div class="darts" id="darts"></div>
+      <div class="hint" id="hint"></div>
+      <div class="msg" id="msg"></div>
+      <div class="actions">
+        <button class="btn" id="btnUndo">↶ Cofnij</button>
+        <button class="btn" id="btnNext">Następny gracz →</button>
+      </div>
+    </div>
+    <div class="card" id="histCard" style="padding:10px 16px"><div class="small" style="margin-bottom:4px">Historia</div><div class="hist" id="hist" style="margin-top:0"></div></div>
+    <div class="card" id="inputCard">
+      <div class="tabs">
+        <button class="btn sel" data-tab="board">Kliknij na tarczy</button>
+        <button class="btn" data-tab="keys">Wybierz z listy</button>
+      </div>
+      <div id="tabBoard">
+        <div class="boardbox"><div class="tip" id="tip"></div><svg id="board" viewBox="-262 -262 524 524"></svg></div>
+        <div class="actions">
+          <button class="btn" id="btnMiss">Pudło (0)</button>
+        </div>
+        <p class="small" style="text-align:center;margin:8px 0 0">Kliknij w miejsce trafienia – zewnętrzny wąski pierścień to podwójne, wewnętrzny potrójne.</p>
+      </div>
+      <div id="tabKeys" style="display:none">
+        <div class="mults" id="mults">
+          <button class="btn sel" data-mult="1">Pojedyncze</button>
+          <button class="btn" data-mult="2">Podwójne (D)</button>
+          <button class="btn" data-mult="3">Potrójne (T)</button>
+        </div>
+        <div class="nums" id="nums"></div>
+        <p class="small" style="text-align:center;margin:10px 0 0">Najpierw wybierz mnożnik (domyślnie pojedyncze), potem pole. Każde kliknięcie to jedna lotka. Na klawiaturze: <b>d</b>/<b>t</b> i liczba + Enter.</p>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- PLAYERS -->
+  <div id="playersView" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <button class="btn" id="plBack">← Wróć</button>
+      <span class="small" id="plCount"></span>
+    </div>
+    <div class="card">
+      <div class="sechead">Zawodnicy</div>
+      <input type="search" id="plSearch" placeholder="🔍 Szukaj zawodnika…" autocomplete="off" style="width:100%">
+      <div id="plList" class="plgrid"></div>
+      <form id="plAdd" class="row" style="margin-top:14px">
+        <input type="text" id="plNew" placeholder="Imię nowego zawodnika" maxlength="20" autocomplete="off">
+        <button class="btn primary" type="submit">+ Dodaj zawodnika</button>
+      </form>
+      <p class="small" id="plErr"></p>
+    </div>
+  </div>
+
+  <!-- PROFILE -->
+  <div id="profileView" style="display:none"></div>
+
+  <!-- STATS -->
+  <div id="stats" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <button class="btn" id="statsBack">← Wróć</button>
+      <span class="small" id="syncInfo"></span>
+    </div>
+    <div class="card">
+      <div class="sechead">Ranking</div>
+      <div class="tblwrap"><table class="tbl" id="rankTbl"></table></div>
+      <p class="small" style="margin:8px 0 0"><b>Współczynnik</b> = procent pokonanych rywali we wszystkich legach (np. 2. miejsce na 4 graczy = 2 z 3 pokonanych). Każdy startuje z 50, a z każdym legiem wynik zbliża się do prawdziwego – liczy się jakość, nie liczba gier, więc opuszczone wieczory nie obniżają pozycji. Do klasyfikacji potrzeba min. 3 legów z rywalami. Śr. miejsce = średnio zajmowane miejsce / średnio graczy w legu. Śr. = średnia punktów na 3 lotki.</p>
+    </div>
+    <div class="recs">
+      <div class="card"><div class="sechead">Najwyższe tury</div><ol class="rec" id="recTurn"></ol></div>
+      <div class="card"><div class="sechead">Największe checkouty</div><ol class="rec" id="recCo"></ol></div>
+      <div class="card"><div class="sechead">Najkrótsze wygrane legi</div><ol class="rec" id="recLeg"></ol></div>
+      <div class="card"><div class="sechead">Najlepsze średnie w legu</div><ol class="rec" id="recAvg"></ol></div>
+    </div>
+    <div class="card" style="margin-top:12px" id="manageCard">
+      <div class="sechead">Historia legów</div>
+      <div id="mgLocked" class="mglocked">
+        <div style="font-size:30px">🔒</div>
+        <div><b>Zarządzanie jest chronione hasłem</b><div class="small">Usuwanie legów, graczy i dni wymaga podania hasła.</div></div>
+        <button class="btn primary" id="mgUnlock">Odblokuj</button>
+      </div>
+      <div id="mgBody" style="display:none">
+      <div class="mgstate"><span class="small">🔓 Odblokowane – zablokuje się samo po 5 min bez działania.</span><span class="row"><button class="btn sm" id="mgPin">Zmień hasło</button><button class="btn sm" id="mgLock">🔒 Zablokuj</button></span></div>
+      <div class="mfilters">
+        <select id="mfPlayer" aria-label="Gracz"></select>
+        <label class="small">od <input type="date" id="mfFrom"></label>
+        <label class="small">do <input type="date" id="mfTo"></label>
+        <button class="btn sm" id="mfClear">✕ Wyczyść filtry</button>
+      </div>
+      <div class="mfbar"><span class="small" id="mfSummary"></span><div class="row" id="mfBulk"></div></div>
+      <div id="legLog" class="leglog"></div>
+      <p class="small" style="margin:10px 0 0">Kliknij leg, żeby zobaczyć szczegóły i usunąć cały leg albo jednego gracza. Każde usunięcie można przez chwilę cofnąć.</p>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn danger" id="delAll">Wyczyść wszystkie statystyki</button>
+      </div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="sechead">Kopia zapasowa</div>
+      <p class="small" style="margin:0 0 8px">Statystyki są w bazie na tym urządzeniu. Raz na jakiś czas zapisz kopię do pliku – przyda się, gdy zmienisz tablet albo wyczyścisz przeglądarkę.</p>
+      <div class="actions">
+        <button class="btn" id="btnExport">⬇ Zapisz kopię do pliku</button>
+        <button class="btn" id="btnImport">⬆ Wczytaj kopię z pliku</button>
+      </div>
+      <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="finModal">
+  <div class="card">
+    <div class="small" id="finSub"></div>
+    <div class="disp" id="finTitle"></div>
+    <div id="finBody"></div>
+    <div class="actions" style="margin-top:16px" id="finBtns"></div>
+  </div>
+</div>
+
+<div class="modal" id="cfModal">
+  <div class="card">
+    <div class="disp" style="font-size:28px" id="cfTitle"></div>
+    <div class="small" id="cfText"></div>
+    <input type="text" id="cfInput" maxlength="20" style="display:none;width:100%;margin-top:12px">
+    <div class="actions" style="margin-top:16px">
+      <button class="btn" id="cfCancel">Anuluj</button>
+      <button class="btn danger" id="cfOk"></button>
+    </div>
+  </div>
+</div>
+<div id="tipf" class="tipf"></div>
+<div id="undoBar" class="undobar"><span id="undoText"></span><button class="btn sm" id="undoBtn">↶ Cofnij</button><button class="btn sm" id="undoOk" title="Zatwierdź teraz">✓</button><div class="undoprog" id="undoProg"></div></div>
+<script src="app.js"></script>
+</body>
+</html>
