@@ -1,11 +1,10 @@
 // Dart – service worker: keeps the whole app available offline.
-const CACHE = 'dart-v7';
+const CACHE = 'dart-v14';
 const FILES = [
   './', './index.html', './style.css', './app.js', './manifest.webmanifest',
-  './icons/logo.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
-  './fonts/anton-sc-latin-400-normal.woff2', './fonts/anton-sc-latin-ext-400-normal.woff2',
-  './fonts/inter-latin-400-normal.woff2', './fonts/inter-latin-600-normal.woff2', './fonts/inter-latin-700-normal.woff2',
-  './fonts/inter-latin-ext-400-normal.woff2', './fonts/inter-latin-ext-600-normal.woff2', './fonts/inter-latin-ext-700-normal.woff2'
+  './icons/logo.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
+  './fonts/space-grotesk-latin-400-normal.woff2', './fonts/space-grotesk-latin-ext-400-normal.woff2', './fonts/space-grotesk-latin-500-normal.woff2', './fonts/space-grotesk-latin-ext-500-normal.woff2', './fonts/space-grotesk-latin-700-normal.woff2', './fonts/space-grotesk-latin-ext-700-normal.woff2',
+  
 ];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

@@ -51,4 +51,4 @@ Statystyki zostają, bo są w bazie tabletu, a nie w plikach aplikacji.
 Android 7 lub nowszy z w miarę aktualnym Chrome albo iPad z iPadOS 13 lub nowszym.
 Na bardzo starym tablecie zaktualizuj najpierw *Chrome* i *Android System WebView* w Sklepie Play.
 
-Czcionki: Anton SC i Inter (SIL Open Font License, licencje w folderze `fonts`).
+Czcionka: Space Grotesk (SIL Open Font License, licencja w folderze `fonts`).

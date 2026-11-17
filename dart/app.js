@@ -1,8 +1,8 @@
 (() => {
 
 const ORDER = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
-const R = { board:260, dOut:225, dIn:180, tOut:135, tIn:75, bull:75, eye:37.5, num:242.5 };
-const COL = { black:'#1f1f1f', white:'#efe6cf', green:'#1b9e5a', red:'#d7263d', bull:'#1b9e5a', eye:'#d7263d', bg:'#111111' };
+const R = { board:260, dOut:228.98, dIn:185.4, tOut:138.12, tIn:78.3, bull:78.3, eye:38.41, num:245.25 };
+const COL = { black:'#1F1F1F', white:'#EFE6CF', green:'#1B9E5A', red:'#D7263D', bull:'#1B9E5A', eye:'#D7263D', bg:'#EFE6CF', ink:'#1F1F1F', dark:'#1F1F1F' };
 const KEY = 'dart-scorer-v2';
 
 const $ = id => document.getElementById(id);
@@ -247,9 +247,9 @@ function arc(r1, r2, a1, a2){
   return `M${x1},${y1}A${r2},${r2} 0 0 1 ${x2},${y2}L${x3},${y3}A${r1},${r1} 0 0 0 ${x4},${y4}Z`;
 }
 function buildBoard(){
-  // geometry & colours from the user's touch board (tarcza_dotykowa_v2.svg), scaled x2.5:
-  // bull 0–15, 25 15–30, treble 30–54, single 54–72, double 72–90, numbers at r 97 (original units)
-  let h = `<circle r="${R.board}" fill="${COL.bg}"/><g stroke="${COL.bg}" stroke-width="2">`;
+  // tarcza_dart_social.svg (1000×1000, środek 500) przeskalowana ×0,5306 do r = 260:
+  // bull 0–72,39 · 25 do 147,56 · potrójne do 260,31 · pojedyncze do 349,40 · podwójne do 431,53 · obwódka z cyframi do 490
+  let h = `<circle r="${R.board}" fill="${COL.bg}"/><g stroke="${COL.bg}" stroke-width="3.2" stroke-linejoin="round">`;
   ORDER.forEach((n,i) => {
     const mid = -90 + i*18, a1 = mid-9, a2 = mid+9;
     const dark = i % 2 === 0;
@@ -259,11 +259,10 @@ function buildBoard(){
     h += `<path d="${arc(R.tOut,R.dIn,a1,a2)}" fill="${base}"/>`;
     h += `<path d="${arc(R.dIn,R.dOut,a1,a2)}" fill="${ring}"/>`;
   });
-  h += `<circle r="${R.bull}" fill="${COL.bull}"/>`;
-  h += `<circle r="${R.bull+1.5}" fill="none" stroke="${COL.bg}" stroke-width="6"/>`;
+  h += `<path d="M${R.bull},0A${R.bull},${R.bull} 0 1 1 ${-R.bull},0A${R.bull},${R.bull} 0 1 1 ${R.bull},0ZM${R.eye},0A${R.eye},${R.eye} 0 1 0 ${-R.eye},0A${R.eye},${R.eye} 0 1 0 ${R.eye},0Z" fill="${COL.bull}" fill-rule="evenodd"/>`;
   h += `<circle r="${R.eye}" fill="${COL.eye}"/></g>`;
-  h += `<g fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="27.5" font-weight="bold" text-anchor="middle" pointer-events="none">`;
-  ORDER.forEach((n,i) => { const [x,y] = polar(R.num, -90 + i*18); h += `<text x="${x.toFixed(2)}" y="${(y+9.75).toFixed(2)}">${n}</text>`; });
+  h += `<g fill="${COL.ink}" font-family="'Space Grotesk', ui-sans-serif, system-ui, sans-serif" font-size="24.4" font-weight="500" text-anchor="middle" dominant-baseline="central" pointer-events="none">`;
+  ORDER.forEach((n,i) => { const [x,y] = polar(R.num, -90 + i*18); h += `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}">${n}</text>`; });
   h += `</g>`;
   h += `<g id="hl" class="hl" pointer-events="none"></g><g id="flash" pointer-events="none"></g><g id="marks" pointer-events="none"></g>`;
   $('board').innerHTML = h;
@@ -298,7 +297,7 @@ function hitAt(ev){
 function showHL(h, strong){
   const g = $('hl'), tip = $('tip');
   if (!h || !canThrow()){ g.innerHTML=''; tip.classList.remove('show'); return; }
-  g.innerHTML = h.shape;
+  g.innerHTML = h.shape + h.shape;
   g.setAttribute('class', strong ? 'hl strong' : 'hl');
   const word = h.m===3 ? 'potrójne' : h.m===2 ? (h.n===25?'środek':'podwójne') : h.n===0 ? 'poza polem punktowym' : 'pojedyncze';
   tip.innerHTML = `<b>${h.label}</b> <span>= ${h.score}</span><small>${word}</small>`;
@@ -340,7 +339,7 @@ function drawMarks(){
   const g = document.getElementById('marks'); if (!g) return;
   if (!S.cur || !S.cur.length) marks = [];
   marks = marks.slice(0, S.cur ? S.cur.length : 0);
-  g.innerHTML = marks.map(([x,y],i) => `<circle cx="${x}" cy="${y}" r="7" fill="#f2c14e" stroke="#000" stroke-width="2"/><text x="${x}" y="${y-12}" fill="#f2c14e" font-size="16" font-weight="700" text-anchor="middle" stroke="#000" stroke-width="3" paint-order="stroke">${i+1}</text>`).join('');
+  g.innerHTML = marks.map(([x,y],i) => `<circle cx="${x}" cy="${y}" r="7" fill="#efe6cf" stroke="#000" stroke-width="2"/><text x="${x}" y="${y-12}" fill="#efe6cf" font-size="16" font-weight="700" text-anchor="middle" stroke="#000" stroke-width="3" paint-order="stroke">${i+1}</text>`).join('');
 }
 
 /* ---------- MODALS ---------- */
@@ -384,11 +383,12 @@ let cfFn = null;
 function promptBox(title, text, value, ok, fn, secret){
   confirmBox(title, text, ok, () => fn($('cfInput').value));
   $('cfInput').type = secret ? 'password' : 'text'; $('cfInput').maxLength = secret ? 40 : 20;
+  $('cfIcon').style.display = secret ? '' : 'none';
   $('cfInput').style.display = ''; $('cfInput').value = value; setTimeout(() => { $('cfInput').focus(); $('cfInput').select(); }, 30);
 }
 $('cfInput').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('cfOk').click(); } });
 function confirmBox(title, text, ok, fn){
-  $('cfInput').style.display = 'none';
+  $('cfInput').style.display = 'none'; $('cfIcon').style.display = 'none';
   $('cfTitle').textContent = title; $('cfText').textContent = text; $('cfOk').textContent = ok; cfFn = fn;
   $('cfCancel').style.display = fn ? '' : 'none';
   showModal('cfModal');
@@ -491,7 +491,7 @@ function requireAdmin(fn, why){
   if (Date.now() < lockoutUntil){
     confirmBox('Za dużo prób', `Spróbuj ponownie za ${Math.ceil((lockoutUntil - Date.now())/1000)} s.`, 'OK', null); return;
   }
-  promptBox('🔒 Podaj hasło', why || 'Ta czynność zmienia statystyki, więc jest chroniona hasłem.', '', 'Odblokuj', pw => {
+  promptBox('Podaj hasło', why || 'Ta czynność zmienia statystyki, więc jest chroniona hasłem.', '', 'Odblokuj', pw => {
     if (pinOk(pw)){
       badTries = 0; unlockedUntil = Date.now() + UNLOCK_MS;
       fn();
@@ -818,17 +818,17 @@ function heatBoard(hits){
   let max = 0; hits.forEach((v,k) => { if (k !== '0') max = Math.max(max, v); });
   const a = (k) => { const v = hits.get(k)||0; return v ? (0.18 + 0.82*Math.sqrt(v/max)).toFixed(2) : 0; };
   const tip = (k, name) => `${name}: ${hits.get(k)||0}×`;
-  let h = `<circle r="${R.board}" fill="${COL.bg}"/><g stroke="${COL.bg}" stroke-width="2">`;
+  let h = `<circle r="${R.board}" fill="#1f1f1f"/><g stroke="#1f1f1f" stroke-width="2">`;
   ORDER.forEach((n,i) => {
     const mid = -90 + i*18, a1 = mid-9, a2 = mid+9;
     [['T'+n, R.tIn, R.tOut, 'T'+n], [String(n), R.tOut, R.dIn, String(n)], ['D'+n, R.dIn, R.dOut, 'D'+n]].forEach(([k, r1, r2, nm]) => {
-      h += `<path d="${arc(r1,r2,a1,a2)}" fill="#26292c"/><path d="${arc(r1,r2,a1,a2)}" fill="#f2c14e" fill-opacity="${a(k)}" data-tip="${tip(k,nm)}"/>`;
+      h += `<path d="${arc(r1,r2,a1,a2)}" fill="#2a2a2a"/><path d="${arc(r1,r2,a1,a2)}" fill="#efe6cf" fill-opacity="${a(k)}" data-tip="${tip(k,nm)}"/>`;
     });
   });
-  h += `<circle r="${R.bull}" fill="#26292c"/><circle r="${R.bull}" fill="#f2c14e" fill-opacity="${a('25')}" data-tip="${tip('25','25')}"/>`;
-  h += `<circle r="${R.eye}" fill="#26292c" stroke="${COL.bg}" stroke-width="4"/><circle r="${R.eye}" fill="#f2c14e" fill-opacity="${a('Bull')}" data-tip="${tip('Bull','Bull')}"/></g>`;
-  h += `<g fill="#9aa1a6" font-family="Arial, Helvetica, sans-serif" font-size="27.5" font-weight="bold" text-anchor="middle" pointer-events="none">`;
-  ORDER.forEach((n,i) => { const [x,y] = polar(R.num, -90 + i*18); h += `<text x="${x.toFixed(2)}" y="${(y+9.75).toFixed(2)}">${n}</text>`; });
+  h += `<circle r="${R.bull}" fill="#2a2a2a"/><circle r="${R.bull}" fill="#efe6cf" fill-opacity="${a('25')}" data-tip="${tip('25','25')}"/>`;
+  h += `<circle r="${R.eye}" fill="#2a2a2a" stroke="#1f1f1f" stroke-width="4"/><circle r="${R.eye}" fill="#efe6cf" fill-opacity="${a('Bull')}" data-tip="${tip('Bull','Bull')}"/></g>`;
+  h += `<g fill="rgba(239,230,207,.55)" font-family="'Space Grotesk', sans-serif" font-size="24.4" font-weight="500" dominant-baseline="central" text-anchor="middle" pointer-events="none">`;
+  ORDER.forEach((n,i) => { const [x,y] = polar(R.num, -90 + i*18); h += `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}">${n}</text>`; });
   return `<svg class="heat" viewBox="-262 -262 524 524">${h}</g></svg>`;
 }
 function renderProfile(){
@@ -972,7 +972,7 @@ function render(){
   const h = [];
   for (let i=S.turns.length-1; i>=0 && h.length<30; i--){
     const t = S.turns[i];
-    h.push(`<div><b>${esc(S.players[t.p])}</b>: ${t.n ? t.darts.map(d=>d.label).join(', ') : '(pominięta)'} ${t.bust ? '→ <span style="color:#ff6b6b">bust</span>' : '= '+t.total}${t.fin?' <span style="color:#f2c14e">✓ checkout</span>':''}</div>`);
+    h.push(`<div><b>${esc(S.players[t.p])}</b>: ${t.n ? t.darts.map(d=>d.label).join(', ') : '(pominięta)'} ${t.bust ? '→ <span style="color:#ef4b62">bust</span>' : '= '+t.total}${t.fin?' <span style="color:#efe6cf">✓ checkout</span>':''}</div>`);
   }
   $('hist').innerHTML = h.join('');
   drawMarks();
