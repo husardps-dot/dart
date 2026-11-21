@@ -117,7 +117,17 @@
     <div class="card">
       <div class="sechead">Ranking</div>
       <div class="tblwrap"><table class="tbl" id="rankTbl"></table></div>
-      <p class="small" style="margin:8px 0 0"><b>Współczynnik</b> = procent pokonanych rywali we wszystkich legach (np. 2. miejsce na 4 graczy = 2 z 3 pokonanych). Każdy startuje z 50, a z każdym legiem wynik zbliża się do prawdziwego – liczy się jakość, nie liczba gier, więc opuszczone wieczory nie obniżają pozycji. Do klasyfikacji potrzeba min. 3 legów z rywalami. Śr. miejsce = średnio zajmowane miejsce / średnio graczy w legu. Śr. = średnia punktów na 3 lotki.</p>
+      <p class="small" style="margin:8px 0 0"><b>ELO</b> – każdy zaczyna z 1000. Po każdym legu gracz jest porównywany z każdym rywalem (pairwise Elo): wygrana z mocniejszym daje więcej punktów, przegrana ze słabszym zabiera więcej. K = 40 przez pierwsze 10 meczów, 32 do 49 meczów, potem 24. Suma zmian w meczu zawsze wynosi 0. ELO nie spada za nieaktywność, a usunięty leg przestaje się liczyć. Śr. miejsce = średnio zajmowane miejsce / średnio graczy w legu. Śr. = średnia punktów na 3 lotki.</p>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="sechead">Rozwój rankingu</div>
+      <div id="eloChart"></div>
+      <div id="eloChips" class="chips"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="sechead">Ostatnie zmiany ELO</div>
+      <div id="eloRecent" class="erecent"></div>
+      <div class="actions" style="margin-top:8px"><button class="btn sm" id="eloMore">Pokaż więcej</button></div>
     </div>
     <div class="recs">
       <div class="card"><div class="sechead">Najwyższe tury</div><ol class="rec" id="recTurn"></ol></div>
@@ -155,6 +165,11 @@
         <button class="btn" id="btnExport">⬇ Zapisz kopię do pliku</button>
         <button class="btn" id="btnImport">⬆ Wczytaj kopię z pliku</button>
       </div>
+      <div class="actions">
+        <button class="btn" id="exRank">Ranking (CSV)</button>
+        <button class="btn" id="exLegs">Wszystkie legi (CSV)</button>
+      </div>
+      <p class="small" id="exInfo" style="margin:8px 0 0">Pliki CSV otworzysz w Excelu albo Arkuszach Google.</p>
       <input type="file" id="importFile" accept=".json,application/json" style="display:none">
     </div>
   </div>

@@ -348,11 +348,14 @@ const hideModal = id => $(id).classList.remove('show');
 const MEDAL = ['🥇','🥈','🥉'];
 const placeTxt = n => (MEDAL[n-1] || '') + ' ' + n + '.';
 function standingsTable(){
+  const ps = S.finished.map((f,idx) => ({ n:S.players[f.p], pl:idx+1 }));
+  const pre = ps.length > 1 ? legDeltas(computeElo(), ps) : null;
   const rows = S.finished.map((f,idx) => {
     const st = legStats(f.p, false);
-    return `<tr><td>${placeTxt(idx+1)}</td><td class="l">${esc(S.players[f.p])}</td><td>${st.darts}</td><td>${st.avg.toFixed(1)}</td><td>${st.best||'–'}</td><td>${f.auto ? (remaining(f.p) ? `<span class="small">zost. ${remaining(f.p)}</span>` : '–') : st.co}</td></tr>`;
+    const eloCell = pre ? `<b>${eloInt((pre.before[idx]+pre.d[idx])/100)}</b> <span class="${dCls(pre.d[idx])}">${fmtD(pre.d[idx]/100)}</span>` : '–';
+    return `<tr><td>${placeTxt(idx+1)}</td><td class="l">${esc(S.players[f.p])}</td><td>${st.darts}</td><td>${st.avg.toFixed(1)}</td><td>${st.best||'–'}</td><td>${f.auto ? (remaining(f.p) ? `<span class="small">zost. ${remaining(f.p)}</span>` : '–') : st.co}</td><td class="nowrap">${eloCell}</td></tr>`;
   }).join('');
-  return `<div class="tblwrap"><table class="tbl sm"><tr><th></th><th class="l">Gracz</th><th>Lotki</th><th>Śr.</th><th>Max</th><th>Check</th></tr>${rows}</table></div>`;
+  return `<div class="tblwrap"><table class="tbl sm"><tr><th></th><th class="l">Gracz</th><th>Lotki</th><th>Śr.</th><th>Max</th><th>Check</th><th title="ELO po zapisaniu legu i zmiana">ELO</th></tr>${rows}</table></div>${pre ? '<div class="small" style="margin-top:6px">Zmiany ELO zapiszą się po kliknięciu „Zapisz”.</div>' : ''}`;
 }
 function showPending(){
   const P = S.pending; if (!P){ hideModal('finModal'); return; }
@@ -396,9 +399,148 @@ function confirmBox(title, text, ok, fn){
 $('cfCancel').onclick = () => hideModal('cfModal');
 $('cfOk').onclick = () => { hideModal('cfModal'); const f = cfFn; cfFn = null; if (f) f(); };
 
+/* ---------- RANKING ELO (pairwise) ----------
+   Start 1000. Każdy leg (mecz) z ≥2 graczami: każdy gracz porównywany z każdym rywalem.
+   E_ij = 1 / (1 + 10^((R_j − R_i)/400)),  S_ij = 1 / 0 / 0,5 (wyżej / niżej / to samo miejsce)
+   ΔR_i = Σ_j K_ij/(n−1) · (S_ij − E_ij),  K_ij = (K_i + K_j)/2,
+   K = 40 (0–9 meczów), 32 (10–49), 24 (od 50) – liczone z meczów rozegranych PRZED tym meczem.
+   Wszystko liczone z ELO sprzed meczu; ELO trzymane w setnych częściach punktu (liczby całkowite),
+   a ewentualna różnica z zaokrągleń trafia do gracza z największą zmianą – suma zmian = dokładnie 0.
+   Ranking jest zawsze przeliczany od zera ze wszystkich zapisanych legów w kolejności dat,
+   więc usunięty (anulowany) leg nie ma na niego wpływu. Brak spadków za nieaktywność. */
+const ELO_START = 1000;
+const kFor = m => m < 10 ? 40 : m < 50 ? 32 : 24;
+let eloState = null;
+function legDeltas(state, ps){
+  const n = ps.length;
+  const keys = ps.map(p => p.n.toLowerCase());
+  const before = keys.map(k => state.R.has(k) ? state.R.get(k) : ELO_START * 100);
+  const Ks = keys.map(k => kFor(state.M.get(k) || 0));
+  const raw = ps.map((p, i) => {
+    let s = 0;
+    for (let j = 0; j < n; j++){
+      if (j === i) continue;
+      const E = 1 / (1 + Math.pow(10, (before[j] - before[i]) / 100 / 400));
+      const S = p.pl < ps[j].pl ? 1 : p.pl > ps[j].pl ? 0 : 0.5;
+      s += (Ks[i] + Ks[j]) / 2 / (n - 1) * (S - E);
+    }
+    return s;
+  });
+  const d = raw.map(x => Math.round(x * 100));
+  const residual = -d.reduce((a, b) => a + b, 0);
+  if (residual){ let idx = 0; raw.forEach((x, i) => { if (Math.abs(x) > Math.abs(raw[idx])) idx = i; }); d[idx] += residual; }
+  return { keys, before, d, Ks };
+}
+function computeElo(){
+  const state = { R:new Map(), M:new Map(), PEAK:new Map(), LAST:new Map(), hist:new Map(), matches:[] };
+  const legs = ST.legs.map((L, i) => ({ L, i })).sort((a, b) => a.L.d < b.L.d ? -1 : a.L.d > b.L.d ? 1 : a.i - b.i).map(x => x.L);
+  for (const L of legs){
+    L.players.forEach(p => { delete p.eb; delete p.ed; delete p.ea; delete p.k; });
+    if (L.players.length < 2) continue;
+    const ps = L.players;
+    const { keys, before, d, Ks } = legDeltas(state, ps);
+    const mi = state.matches.length;
+    const rec = { L, idx:mi, rows:[] };
+    ps.forEach((p, i) => {
+      const k = keys[i], after = before[i] + d[i];
+      state.R.set(k, after);
+      state.M.set(k, (state.M.get(k) || 0) + 1);
+      state.PEAK.set(k, Math.max(state.PEAK.has(k) ? state.PEAK.get(k) : ELO_START * 100, after));
+      state.LAST.set(k, d[i]);
+      p.eb = before[i] / 100; p.ed = d[i] / 100; p.ea = after / 100; p.k = Ks[i];
+      if (!state.hist.has(k)) state.hist.set(k, []);
+      state.hist.get(k).push({ d:L.d, idx:mi, b:p.eb, dd:p.ed, a:p.ea, k:p.k, pl:p.pl, np:ps.length, start:L.start });
+      rec.rows.push({ key:k, name:p.n, pl:p.pl, b:p.eb, dd:p.ed, a:p.ea });
+    });
+    rec.rows.sort((a, b) => a.pl - b.pl);
+    state.matches.push(rec);
+  }
+  eloState = state;
+  return state;
+}
+const fmtElo = v => (Math.round(v * 10) / 10).toFixed(1).replace(/\.0$/, '');
+const eloInt = v => Math.round(v);
+const fmtD = v => (v > 0 ? '+' : v < 0 ? '−' : '±') + Math.abs(v).toFixed(1);
+const dCls = v => v > 0 ? 'eup' : v < 0 ? 'edown' : 'esame';
+
+/* line chart: series = [{name, color, muted, pts:[{x,y,tip}]}] */
+function eloLineChart(series, opt){
+  const W = 640, H = opt.h || 230, pl = 44, pr = opt.pr || 104, pt = 14, pb = 26;
+  const all = series.flatMap(s => s.pts);
+  if (!all.length) return '<div class="small">Brak meczów z rywalami.</div>';
+  let yMin = Math.min(ELO_START, ...all.map(p => p.y)), yMax = Math.max(ELO_START, ...all.map(p => p.y));
+  const span = Math.max(20, yMax - yMin); yMin -= span * 0.12; yMax += span * 0.12;
+  const step = [5,10,20,25,50,100,200][[5,10,20,25,50,100,200].findIndex(s => (yMax - yMin) / s <= 6)] || 200;
+  const xMin = opt.xMin, xMax = Math.max(opt.xMax, xMin + 1);
+  const X = x => pl + (W - pl - pr) * (x - xMin) / (xMax - xMin), Y = v => pt + (H - pt - pb) * (1 - (v - yMin) / (yMax - yMin));
+  let g = '';
+  for (let v = Math.ceil(yMin / step) * step; v <= yMax; v += step) g += `<line x1="${pl}" x2="${W-pr}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="grid"/><text x="${pl-6}" y="${(Y(v)+4).toFixed(1)}" class="ax" text-anchor="end">${v}</text>`;
+  g += `<line x1="${pl}" x2="${W-pr}" y1="${Y(ELO_START).toFixed(1)}" y2="${Y(ELO_START).toFixed(1)}" class="base"/>`;
+  const order = series.slice().sort((a, b) => (a.muted ? 0 : 1) - (b.muted ? 0 : 1));
+  let lines = '', dots = '', labels = [];
+  order.forEach(s => {
+    if (!s.pts.length) return;
+    const d = s.pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
+    lines += `<path d="${d}" fill="none" stroke="${s.muted ? 'rgba(239,230,207,.16)' : s.color}" stroke-width="${s.muted ? 1.5 : 2.5}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (!s.muted){
+      s.pts.forEach(p => { if (p.tip) dots += `<g class="hit" data-tip="${esc(p.tip)}"><circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="10" fill="transparent"/><circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="4" fill="${s.color}" stroke="#1f1f1f" stroke-width="2"/></g>`; });
+      const last = s.pts[s.pts.length - 1];
+      labels.push({ y:Y(last.y), x:X(last.x), text:`${s.name} ${eloInt(last.y)}`, color:s.color });
+    }
+  });
+  labels.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i-1].y < 13) labels[i].y = labels[i-1].y + 13;
+  const lab = labels.map(l => `<text x="${(l.x + 8).toFixed(1)}" y="${(l.y + 4).toFixed(1)}" class="lbl" fill="${l.color}">${esc(l.text)}</text>`).join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opt.aria || 'Rozwój ELO')}">${g}${lines}${dots}${lab}
+    <text x="${pl}" y="${H-6}" class="ax">${esc(opt.left || '')}</text><text x="${W-pr}" y="${H-6}" class="ax" text-anchor="end">${esc(opt.right || '')}</text></svg>`;
+}
+const HL_COLORS = ['#efe6cf', '#d7263d', '#1b9e5a'];
+let eloHL = null, eloRecentN = 6;
+function renderEloRanking(ag){
+  const st = eloState;
+  const ranked = ag.filter(a => a.mElo > 0);
+  if (!st.matches.length){ $('eloChart').innerHTML = '<div class="small">Wykres pojawi się po pierwszym legu z co najmniej dwoma graczami.</div>'; $('eloChips').innerHTML = ''; $('eloRecent').innerHTML = '<div class="small">Brak meczów.</div>'; $('eloMore').style.display = 'none'; return; }
+  if (!eloHL) eloHL = ranked.slice(0, 3).map(a => a.key);
+  eloHL = eloHL.filter(k => ranked.some(a => a.key === k));
+  const series = ranked.map(a => {
+    const h = st.hist.get(a.key) || [];
+    const ci = eloHL.indexOf(a.key);
+    const pts = h.length ? [{ x:h[0].idx - 0.5, y:h[0].b }].concat(h.map(e => ({ x:e.idx, y:e.a, tip:`${a.name} · ${fmtDate(e.d)} · ${e.pl}/${e.np} miejsce · ${fmtD(e.dd)} → ${fmtElo(e.a)}` }))) : [];
+    return { name:a.name, color:ci >= 0 ? HL_COLORS[ci] : null, muted:ci < 0, pts };
+  });
+  const first = st.matches[0].L.d, last = st.matches[st.matches.length - 1].L.d;
+  $('eloChart').innerHTML = eloLineChart(series, { xMin:-0.6, xMax:st.matches.length - 1, left:fmtDate(first), right:`${fmtDate(last)} · ${st.matches.length} meczów`, aria:'Rozwój rankingu ELO' });
+  $('eloChips').innerHTML = '<span class="small">Wyróżnij (max 3):</span> ' + ranked.map(a => {
+    const ci = eloHL.indexOf(a.key);
+    return `<button class="chip ${ci >= 0 ? 'on' : ''}" data-hl="${esc(a.key)}">${ci >= 0 ? `<span class="dot" style="background:${HL_COLORS[ci]}"></span>` : ''}${esc(a.name)} <span class="small">${eloInt(a.elo)}</span></button>`;
+  }).join('');
+  const recent = st.matches.slice().reverse().slice(0, eloRecentN);
+  $('eloRecent').innerHTML = recent.map(m => `<div class="erow"><div class="small">${fmtDate(m.L.d)}, ${fmtTime(m.L.d)} · ${m.L.start} · ${m.L.np} graczy</div><div class="echips">${m.rows.map(r => `<span class="echip"><b>${MEDAL[r.pl-1] || r.pl + '.'}</b> <a class="plink" data-prof="${esc(r.key)}">${esc(r.name)}</a> ${eloInt(r.a)} <span class="${dCls(r.dd)}">${fmtD(r.dd)}</span></span>`).join('')}</div></div>`).join('');
+  $('eloMore').style.display = st.matches.length > eloRecentN ? '' : 'none';
+}
+$('eloChips').addEventListener('click', e => {
+  const b = e.target.closest('[data-hl]'); if (!b) return;
+  const k = b.dataset.hl, i = eloHL.indexOf(k);
+  if (i >= 0) eloHL.splice(i, 1); else { if (eloHL.length >= 3) eloHL.shift(); eloHL.push(k); }
+  renderEloRanking(aggregate());
+});
+$('eloMore').onclick = () => { eloRecentN += 10; renderEloRanking(aggregate()); };
+function eloProfileHtml(P){
+  const h = (eloState && eloState.hist.get(P.key)) || [];
+  if (!h.length) return `<div class="card" style="margin-top:12px"><div class="sechead">Ranking ELO</div><div class="small">Brak meczów z rywalami – startowe ELO ${ELO_START}.</div></div>`;
+  const pts = [{ x:h[0].idx - 0.5, y:h[0].b }].concat(h.map(e => ({ x:e.idx, y:e.a, tip:`${fmtDate(e.d)} · ${e.pl}/${e.np} miejsce · ${fmtD(e.dd)} → ${fmtElo(e.a)}` })));
+  const chart = eloLineChart([{ name:P.name, color:HL_COLORS[0], muted:false, pts }], { xMin:h[0].idx - 0.6, xMax:h[h.length-1].idx, left:fmtDate(h[0].d), right:`${fmtDate(h[h.length-1].d)} · ${h.length} meczów`, pr:104, aria:'Rozwój ELO gracza' });
+  const rows = h.slice().reverse().map(e => `<tr><td class="l">${fmtDate(e.d)}, ${fmtTime(e.d)}</td><td>${e.start}</td><td>${MEDAL[e.pl-1] || ''} ${e.pl}/${e.np}</td><td>${fmtElo(e.b)}</td><td class="${dCls(e.dd)}">${fmtD(e.dd)}</td><td><b>${fmtElo(e.a)}</b></td><td class="small">${e.k}</td></tr>`).join('');
+  return `<div class="pgrid">
+    <div class="card"><div class="sechead">Rozwój ELO</div>${chart}<div class="small">Przerywana linia = start (${ELO_START}). Najedź na punkt, żeby zobaczyć mecz.</div></div>
+    <div class="card"><div class="sechead">Historia ELO</div><div class="tblwrap ehist"><table class="tbl sm"><tr><th class="l">Data</th><th>Gra</th><th>Miejsce</th><th>Przed</th><th>Zmiana</th><th>Po</th><th title="Współczynnik K użyty w tym meczu">K</th></tr>${rows}</table></div></div>
+  </div>`;
+}
+
 /* ---------- STATS / RANKING ---------- */
 const RATING_K = 6, RATING_MIN = 3;
 function aggregate(){
+  const E = computeElo();
   const M = new Map();
   for (const L of ST.legs) for (const p of L.players){
     const key = p.n.toLowerCase();
@@ -419,7 +561,14 @@ function aggregate(){
     a.ranked = a.mp >= RATING_MIN;
     a.avgPl = a.mp ? a.plSum/a.mp : 0; a.avgNp = a.mp ? a.npSum/a.mp : 0;
   });
-  list.sort((x,y) => (y.ranked - x.ranked) || y.rating-x.rating || y.w-x.w || y.avg-x.avg);
+  list.forEach(a => {
+    a.elo = (E.R.has(a.key) ? E.R.get(a.key) : ELO_START*100) / 100;
+    a.mElo = E.M.get(a.key) || 0;
+    a.peak = (E.PEAK.has(a.key) ? E.PEAK.get(a.key) : ELO_START*100) / 100;
+    a.lastD = E.LAST.has(a.key) ? E.LAST.get(a.key) / 100 : null;
+    a.ranked = a.mElo > 0;
+  });
+  list.sort((x,y) => (y.ranked - x.ranked) || y.elo - x.elo || y.mElo - x.mElo || x.name.localeCompare(y.name,'pl'));
   list.forEach((a,i) => a.rank = a.ranked ? i+1 : null);
   return list;
 }
@@ -430,10 +579,11 @@ function topList(items, el, fmt){
 function renderStats(){
   const ag = aggregate();
   const firstUn = ag.findIndex(a => !a.ranked);
-  $('rankTbl').innerHTML = `<tr><th>#</th><th class="l">Gracz</th><th title="Procent pokonanych rywali, start od 50">Współczynnik</th><th title="Średnie zajęte miejsce / średnia liczba graczy w legu">Śr. miejsce</th><th>Legi</th><th title="Wygrane legi">🥇</th><th title="Drugie miejsca">🥈</th><th title="Trzecie miejsca">🥉</th><th>% wygr.</th><th>Śr.</th><th>Max tura</th><th>Max check</th><th>180</th><th>140+</th><th>100+</th><th>Najkr. leg</th></tr>` +
-    (ag.length ? ag.map((a,i) => (i === firstUn ? `<tr class="unr-h"><td colspan="16" class="l small">Niesklasyfikowani – mniej niż ${RATING_MIN} legi z rywalami</td></tr>` : '') +
-      `<tr class="${a.ranked ? '' : 'unr'}"><td>${a.rank || '–'}</td><td class="l"><a class="plink" data-prof="${esc(a.key)}"><b>${esc(a.name)}</b></a></td><td class="coef">${a.mp ? `<b>${a.rating.toFixed(1)}</b><span class="cbar"><span style="width:${a.rating.toFixed(1)}%"></span></span>` : '–'}</td><td>${a.mp ? `${a.avgPl.toFixed(1)} <span class="small">/ ${a.avgNp.toFixed(1)}</span>` : '–'}</td><td>${a.legs}</td><td>${a.w}</td><td>${a.s}</td><td>${a.t}</td><td>${Math.round(a.wp*100)}%</td><td>${a.avg.toFixed(1)}</td><td>${a.bt||'–'}</td><td>${a.co||'–'}</td><td>${a.c180}</td><td>${a.c140}</td><td>${a.c100}</td><td>${a.bestLeg ? a.bestLeg.dt + (a.bestLeg.start!==501?` <span class="small">(${a.bestLeg.start})</span>`:'') : '–'}</td></tr>`).join('')
-      : `<tr><td colspan="16" class="small" style="text-align:center;padding:16px">Jeszcze nie ma zapisanych legów.</td></tr>`);
+  $('rankTbl').innerHTML = `<tr><th>#</th><th class="l">Gracz</th><th title="Aktualne ELO">ELO</th><th title="Zmiana w ostatnim meczu">Ost. zmiana</th><th title="Mecze z rywalami (liczone do ELO)">Mecze</th><th title="Najwyższe osiągnięte ELO">Najwyższe</th><th title="Średnie zajęte miejsce / średnia liczba graczy w legu">Śr. miejsce</th><th title="Wygrane legi">🥇</th><th title="Drugie miejsca">🥈</th><th title="Trzecie miejsca">🥉</th><th>% wygr.</th><th>Śr.</th><th>Max tura</th><th>Max check</th><th>180</th><th>140+</th><th>100+</th><th>Najkr. leg</th></tr>` +
+    (ag.length ? ag.map((a,i) => (i === firstUn ? `<tr class="unr-h"><td colspan="18" class="l small">Bez meczów z rywalami – startowe ${ELO_START} ELO</td></tr>` : '') +
+      `<tr class="${a.ranked ? '' : 'unr'}"><td>${a.rank || '–'}</td><td class="l"><a class="plink" data-prof="${esc(a.key)}"><b>${esc(a.name)}</b></a></td><td class="coef"><b>${eloInt(a.elo)}</b></td><td class="${a.lastD == null ? '' : dCls(a.lastD)}">${a.lastD == null ? '–' : fmtD(a.lastD)}</td><td>${a.mElo}</td><td>${a.mElo ? eloInt(a.peak) : '–'}</td><td>${a.mp ? `${a.avgPl.toFixed(1)} <span class="small">/ ${a.avgNp.toFixed(1)}</span>` : '–'}</td><td>${a.w}</td><td>${a.s}</td><td>${a.t}</td><td>${Math.round(a.wp*100)}%</td><td>${a.avg.toFixed(1)}</td><td>${a.bt||'–'}</td><td>${a.co||'–'}</td><td>${a.c180}</td><td>${a.c140}</td><td>${a.c100}</td><td>${a.bestLeg ? a.bestLeg.dt + (a.bestLeg.start!==501?` <span class="small">(${a.bestLeg.start})</span>`:'') : '–'}</td></tr>`).join('')
+      : `<tr><td colspan="18" class="small" style="text-align:center;padding:16px">Jeszcze nie ma zapisanych legów.</td></tr>`);
+  renderEloRanking(ag);
   const flat = [];
   ST.legs.forEach(L => L.players.forEach(p => flat.push({ ...p, d:L.d, start:L.start })));
   const li = (main, who, extra) => `<li><span class="rv">${main}</span><span class="rn">${esc(who)}</span><span class="small">${extra}</span></li>`;
@@ -607,8 +757,8 @@ function renderManage(){
     arr.forEach(({L,i}) => {
       const ps = L.players.slice().sort((a,b) => a.pl - b.pl);
       h += `<details class="legrow"><summary><span class="lr-time">${fmtTime(L.d)}</span><span class="lr-game">${L.start}${L.out==='double'?' DO':''}</span><span class="lr-pl">${ps.map(p => `<span class="${MF.p===p.n.toLowerCase()?'me':''}">${MEDAL[p.pl-1]||p.pl+'.'} ${esc(p.n)}</span>`).join('')}</span><span class="lr-more">▾</span></summary>
-        <div class="lr-body"><div class="tblwrap"><table class="tbl sm"><tr><th>Miejsce</th><th class="l">Gracz</th><th>Śr.</th><th>Lotki</th><th>Max</th><th>Checkout</th></tr>
-        ${ps.map(p => `<tr><td>${MEDAL[p.pl-1]||''} ${p.pl}.</td><td class="l"><a class="plink" data-prof="${esc(p.n.toLowerCase())}">${esc(p.n)}</a> <button class="btn sm rmx" data-rmp="${i}" data-key="${esc(p.n.toLowerCase())}" title="Usuń tylko tego gracza z tego legu">✕ usuń z legu</button></td><td>${p.dt ? (p.pt/p.dt*3).toFixed(1) : '–'}</td><td>${p.dt}</td><td>${p.bt||'–'}</td><td>${p.co||'–'}</td></tr>`).join('')}
+        <div class="lr-body"><div class="tblwrap"><table class="tbl sm"><tr><th>Miejsce</th><th class="l">Gracz</th><th>Śr.</th><th>Lotki</th><th>Max</th><th>Checkout</th><th>ELO</th></tr>
+        ${ps.map(p => `<tr><td>${MEDAL[p.pl-1]||''} ${p.pl}.</td><td class="l"><a class="plink" data-prof="${esc(p.n.toLowerCase())}">${esc(p.n)}</a> <button class="btn sm rmx" data-rmp="${i}" data-key="${esc(p.n.toLowerCase())}" title="Usuń tylko tego gracza z tego legu">✕ usuń z legu</button></td><td>${p.dt ? (p.pt/p.dt*3).toFixed(1) : '–'}</td><td>${p.dt}</td><td>${p.bt||'–'}</td><td>${p.co||'–'}</td><td class="nowrap">${p.ea != null ? `${fmtElo(p.eb)} → <b>${fmtElo(p.ea)}</b> <span class="${dCls(p.ed)}">${fmtD(p.ed)}</span>` : '–'}</td></tr>`).join('')}
         </table></div>
         <div class="actions" style="margin-top:8px"><button class="btn sm danger" data-delleg="${i}">🗑 Usuń cały leg</button></div>
         <div class="small" style="margin-top:6px">Po usunięciu gracza z legu pozostali przesuwają się na wolne miejsca.</div></div></details>`;
@@ -659,6 +809,53 @@ function wipePlayerStats(key, name, alsoRoster){
   });
 }
 
+async function saveFile(name, text){ download(name, text); return 'saved'; }
+/* ---------- EXPORT (JSON backup + CSV for Excel) ---------- */
+const csvCell = v => { const s = String(v == null ? '' : v); return /[";\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+const dec = (v, d) => (Number(v) || 0).toFixed(d === undefined ? 1 : d).replace('.', ',');
+const toCSV = rows => '﻿' + rows.map(r => r.map(csvCell).join(';')).join('\r\n') + '\r\n';
+const stamp = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; };
+function exportJSON(){
+  const stats = { rev:ST.rev || 0, legs:ST.legs, roster:roster() };
+  return JSON.stringify({ app:'dart-scorer', version:1, exported:new Date().toISOString(), stats }, null, 1);
+}
+function exportRankingCSV(){
+  const rows = [['Miejsce','Gracz','ELO','Najwyższe ELO','Mecze (ELO)','K','Ostatnia zmiana ELO','Pokonani rywale','Wszyscy rywale','Śr. miejsce','Śr. graczy w legu','Legi','1. miejsca','2. miejsca','3. miejsca','% wygranych','Średnia (3 lotki)','Najwyższa tura','Największy checkout','180','140+','100+','Najkrótszy wygrany leg (lotki)','Sklasyfikowany']];
+  allPlayers().sort((x,y) => (x.rank||1e9) - (y.rank||1e9) || x.name.localeCompare(y.name,'pl')).forEach(a => {
+    rows.push([a.rank || '', a.name, dec(a.elo, 2), dec(a.mElo ? a.peak : ELO_START, 2), a.mElo || 0, kFor(a.mElo || 0), a.lastD == null ? '' : dec(a.lastD, 2), a.beat || 0, a.opp || 0, a.mp ? dec(a.avgPl,2) : '', a.mp ? dec(a.avgNp,2) : '', a.legs || 0, a.w || 0, a.s || 0, a.t || 0,
+      a.legs ? dec((a.wp||0)*100, 0) : '', a.legs ? dec(a.avg) : '', a.bt || '', a.co || '', a.c180 || 0, a.c140 || 0, a.c100 || 0, a.bestLeg ? a.bestLeg.dt : '', a.ranked ? 'tak' : 'nie']);
+  });
+  return toCSV(rows);
+}
+function exportLegsCSV(){
+  computeElo();
+  const rows = [['Data','Godzina','Gra','Zakończenie','Liczba graczy','Miejsce','Gracz','Skończył','Lotki','Punkty','Średnia (3 lotki)','Najwyższa tura','Checkout','180','140+','100+','ELO przed','Zmiana ELO','ELO po','K','Tury (rzuty)']];
+  ST.legs.slice().sort((x,y) => x.d < y.d ? -1 : 1).forEach(L => {
+    L.players.slice().sort((a,b) => a.pl - b.pl).forEach(p => {
+      rows.push([dayKey(L.d), fmtTime(L.d), L.start, L.out === 'double' ? 'double out' : 'dowolne', L.np, p.pl, p.n, p.fin ? 'tak' : 'nie', p.dt, p.pt,
+        p.dt ? dec(p.pt/p.dt*3) : '', p.bt || '', p.co || '', p.c180 || 0, p.c140 || 0, p.c100 || 0, p.ea != null ? dec(p.eb, 2) : '', p.ea != null ? dec(p.ed, 2) : '', p.ea != null ? dec(p.ea, 2) : '', p.k || '', Array.isArray(p.tu) ? p.tu.join(' | ') : '']);
+    });
+  });
+  return toCSV(rows);
+}
+async function runExport(kind){
+  const info = $('exInfo');
+  const files = {
+    json:[`dart-social-kopia-${stamp()}.json`, exportJSON],
+    rank:[`dart-social-ranking-${stamp()}.csv`, exportRankingCSV],
+    legs:[`dart-social-legi-${stamp()}.csv`, exportLegsCSV]
+  };
+  const [name, make] = files[kind];
+  if (kind !== 'json' && !ST.legs.length && !roster().length){ if (info) info.textContent = 'Nie ma jeszcze czego eksportować.'; return; }
+  try{
+    const res = await saveFile(name, make());
+    if (info) info.textContent = res === 'copied' ? `Nie można tu zapisać pliku – zawartość ${name} skopiowano do schowka.` : `Gotowe: ${name}`;
+  }catch(e){
+    if (info) info.textContent = (e && e.code === 'declined') ? 'Zapis anulowany.' : 'Nie udało się zapisać pliku.';
+  }
+}
+[['exJson','json'],['exRank','rank'],['exLegs','legs']].forEach(([id,k]) => { const b = $(id); if (b) b.onclick = () => runExport(k); });
+
 /* ---------- PLAYERS & PROFILES ---------- */
 let profKey = null;
 const roster = () => (Array.isArray(ST.roster) ? ST.roster : (ST.roster = []));
@@ -667,7 +864,7 @@ function allPlayers(){
   const M = new Map(ag.map((a,i) => [a.key, Object.assign({}, a)]));
   roster().forEach(r => {
     const k = r.n.toLowerCase();
-    if (!M.has(k)) M.set(k, { key:k, name:r.n, legs:0, w:0, s:0, t:0, avg:0, wp:0, rank:null });
+    if (!M.has(k)) M.set(k, { key:k, name:r.n, legs:0, w:0, s:0, t:0, avg:0, wp:0, rank:null, elo:ELO_START, mElo:0, peak:ELO_START, lastD:null, ranked:false, mp:0 });
     M.get(k).added = r.added;
   });
   return [...M.values()];
@@ -762,7 +959,7 @@ function renderPlayers(){
     .sort((x,y) => (x.rank||1e9) - (y.rank||1e9) || x.name.localeCompare(y.name, 'pl'));
   let h = list.map(a => `<button class="pcard" data-prof="${esc(a.key)}">
       <div class="pc-top"><span class="pc-name">${hlMatch(a.name, q)}</span>${a.rank ? `<span class="pc-rank">#${a.rank}</span>` : ''}</div>
-      <div class="pc-meta">${a.legs ? `${legsWord(a.legs)} · wsp. ${a.mp ? a.rating.toFixed(1) : '–'} · śr. ${a.avg.toFixed(1)}` : 'jeszcze nie grał(a)'}</div>
+      <div class="pc-meta">${a.legs ? `ELO ${eloInt(a.elo)} · ${legsWord(a.legs)} · śr. ${a.avg.toFixed(1)}` : `ELO ${ELO_START} · jeszcze nie grał(a)`}</div>
     </button>`).join('');
   if (!list.length) h = `<div class="small" style="padding:10px 0">${q ? `Nie ma zawodnika „${esc(q)}”. <button class="chip" id="plAddQ">+ Dodaj „${esc(q)}”</button>` : 'Brak zawodników – dodaj pierwszego poniżej.'}</div>`;
   $('plList').innerHTML = h;
@@ -844,22 +1041,24 @@ function renderProfile(){
   const h2h = [...r.h2h.values()].sort((a,b) => b.n - a.n);
   let h = `<div class="row" style="justify-content:space-between;margin-bottom:10px">
       <button class="btn" data-go="players">← Zawodnicy</button>
-      <div class="row"><button class="btn" id="prRename">✎ Zmień nazwę</button>${r.legs ? '<button class="btn" id="prWipe">Usuń statystyki</button>' : ''}<button class="btn danger" id="prDelete">Usuń zawodnika</button></div>
+      <div class="row"><button class="btn h2hbtn ${h2hOpen ? 'on' : ''}" id="prH2H" title="Porównaj z innym zawodnikiem (H2H)" aria-label="Porównanie H2H">${ICO_H2H}</button><button class="btn" id="prRename">✎ Zmień nazwę</button>${r.legs ? '<button class="btn" id="prWipe">Usuń statystyki</button>' : ''}<button class="btn danger" id="prDelete">Usuń zawodnika</button></div>
     </div>
     <div class="card prof-head">
       <div class="ph-av">${esc(P.name.slice(0,1).toUpperCase())}</div>
       <div style="flex:1;min-width:0">
         <div class="ph-name">${esc(P.name)}</div>
-        <div class="small">${P.rank ? `#${P.rank} w rankingu · ` : ''}${r.legs ? `${legsWord(r.legs)} · gra od ${fmtDate(r.first)} · ostatnio ${fmtDate(r.last)}` : (P.added ? `dodany(a) ${fmtDate(P.added)} · ` : '') + 'jeszcze bez rozegranych legów'}</div>
+        <div class="small">${P.rank ? `#${P.rank} w rankingu · ELO ${eloInt(P.elo)} · ` : `ELO ${eloInt(P.elo)} · `}${r.legs ? `${legsWord(r.legs)} · gra od ${fmtDate(r.first)} · ostatnio ${fmtDate(r.last)}` : (P.added ? `dodany(a) ${fmtDate(P.added)} · ` : '') + 'jeszcze bez rozegranych legów'}</div>
       </div>
       ${S.phase !== 'game' && !S.players.some(n => n.toLowerCase() === P.key) ? `<button class="btn primary" id="prToGame">+ Do następnej gry</button>` : ''}
     </div>`;
+  h += h2hPanelHtml(P) + h2hCardHtml(P);
   if (!r.legs){
     $('profileView').innerHTML = h + `<div class="card" style="margin-top:12px"><p class="small" style="margin:0">Statystyki pojawią się po pierwszym zapisanym legu.</p></div>`;
     bindProfile(P); return;
   }
   h += `<div class="tiles">
-      ${tile('Współczynnik', P.mp ? P.rating.toFixed(1) : '–', P.mp ? `pokonał(a) ${P.beat} z ${P.opp} rywali · śr. miejsce ${P.avgPl.toFixed(1)} / ${P.avgNp.toFixed(1)}${P.ranked ? '' : ' · jeszcze niesklasyfikowany(a)'}` : 'brak legów z rywalami')}
+      ${tile('ELO', eloInt(P.elo), P.mElo ? `najwyżej ${eloInt(P.peak)} · ${P.mElo} meczów · K = ${kFor(P.mElo)}` : `start · K = ${kFor(0)}`)}
+      ${tile('Śr. miejsce', P.mp ? P.avgPl.toFixed(1) : '–', P.mp ? `z ${P.avgNp.toFixed(1)} graczy · pokonał(a) ${P.beat} z ${P.opp} rywali` : 'brak legów z rywalami')}
       ${tile('Wygrane', `${r.w}`, `${pct(r.w, r.legs)} legów`)}
       ${tile('Podium', `${r.w + r.s + r.t}`, `🥈 ${r.s} · 🥉 ${r.t}`)}
       ${tile('Średnia (3 lotki)', r.avg.toFixed(1), `najlepszy leg ${r.bestAvg ? r.bestAvg.toFixed(1) : '–'}`)}
@@ -871,6 +1070,7 @@ function renderProfile(){
       ${tile('Najkrótszy wygrany leg', r.bestLeg ? `${r.bestLeg.dt}` : '–', r.bestLeg ? `lotek · ${r.bestLeg.start}` : '')}
       ${tile('Lotki łącznie', `${r.dt}`, `${r.busts} bustów`)}
     </div>
+    ${eloProfileHtml(P)}
     <div class="pgrid">
       <div class="card"><div class="sechead">Forma</div>${formChart(r.form)}</div>
       <div class="card"><div class="sechead">Rozkład tur</div>${r.turns ? bucketBars(r.buckets, r.turns) + `<div class="small" style="margin-top:6px">${r.turns} pełnych tur</div>` : '<div class="small">Brak szczegółowych danych.</div>'}</div>
@@ -878,7 +1078,7 @@ function renderProfile(){
       <div class="card"><div class="sechead">Ulubione zamknięcia</div>${fav.length ? `<ol class="rec">${fav.map(([k,v]) => `<li><span class="rv">${k}</span><span class="small">${v}×</span></li>`).join('')}</ol>` : '<div class="small">Jeszcze nic nie zamknął(a).</div>'}</div>
     </div>
     <div class="card" style="margin-top:12px"><div class="sechead">Pojedynki</div>
-      ${h2h.length ? `<div class="tblwrap"><table class="tbl sm"><tr><th class="l">Przeciwnik</th><th>Wspólne legi</th><th>Wyżej</th><th>Niżej</th><th class="l" style="width:40%">Bilans</th></tr>${h2h.map(o => `<tr><td class="l"><a class="plink" data-prof="${esc(o.key)}">${esc(o.name)}</a></td><td>${o.n}</td><td>${o.win}</td><td>${o.loss}</td><td class="l"><span class="duel"><span style="width:${(o.win/o.n*100).toFixed(1)}%"></span></span></td></tr>`).join('')}</table></div><div class="small" style="margin-top:6px">„Wyżej” = skończył(a) leg na lepszym miejscu niż przeciwnik.</div>` : '<div class="small">Grał(a) tylko sam(a).</div>'}
+      ${h2h.length ? `<div class="tblwrap"><table class="tbl sm"><tr><th class="l">Przeciwnik</th><th>Wspólne legi</th><th>Wyżej</th><th>Niżej</th><th class="l" style="width:40%">Bilans</th></tr>${h2h.map(o => `<tr><td class="l"><a class="plink" data-prof="${esc(o.key)}">${esc(o.name)}</a> <button class="btn sm h2hmini" data-h2h="${esc(o.key)}" title="Porównaj H2H">H2H</button></td><td>${o.n}</td><td>${o.win}</td><td>${o.loss}</td><td class="l"><span class="duel"><span style="width:${(o.win/o.n*100).toFixed(1)}%"></span></span></td></tr>`).join('')}</table></div><div class="small" style="margin-top:6px">„Wyżej” = skończył(a) leg na lepszym miejscu niż przeciwnik.</div>` : '<div class="small">Grał(a) tylko sam(a).</div>'}
     </div>
     <div class="card" style="margin-top:12px"><div class="sechead">Ostatnie legi</div>
       <div class="tblwrap"><table class="tbl sm"><tr><th class="l">Data</th><th>Gra</th><th>Miejsce</th><th>Śr.</th><th>Lotki</th><th>Max</th><th>Checkout</th><th></th></tr>${r.recent.slice(0,15).map(x => `<tr><td class="l">${fmtDate(x.L.d)}</td><td>${x.L.start}</td><td>${MEDAL[x.p.pl-1]||''} ${x.p.pl}/${x.L.np}</td><td>${x.avg.toFixed(1)}</td><td>${x.p.dt}</td><td>${x.p.bt||'–'}</td><td>${x.p.co||'–'}</td><td><button class="btn sm" data-prm="${ST.legs.indexOf(x.L)}" title="Usuń ten leg ze statystyk gracza">🗑</button></td></tr>`).join('')}</table></div>
@@ -889,6 +1089,7 @@ function renderProfile(){
   bindProfile(P);
 }
 function bindProfile(P){
+  bindH2H(P);
   const ren = $('prRename');
   if (ren) ren.onclick = () => promptBox('Zmień nazwę', 'Nowa nazwa zmieni się też we wszystkich zapisanych legach.', P.name, 'Zapisz', v => {
     v = v.trim();
@@ -924,11 +1125,133 @@ function bindProfile(P){
   const tg = $('prToGame');
   if (tg) tg.onclick = () => { if (!S.players.some(n => n.toLowerCase() === P.key)) S.players.push(P.name); save(); view = 'main'; render(); };
 }
+/* ---------- H2H – porównanie dwóch zawodników ---------- */
+const ICO_H2H = "<svg class=\"ico h2hico\" aria-hidden=\"true\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"1821.1 1342.6 566.0 360.4\"><g transform=\"matrix(1,0,0,1,-793.1591,-353.354554)\"><g transform=\"matrix(0.716846,0,0,0.716846,1812.575404,448.089315)\"><path d=\"M1221.901,2083.493C1163.83,2054.135 1123.976,1993.904 1123.976,1924.438C1123.976,1826.138 1203.784,1746.33 1302.084,1746.33C1400.385,1746.33 1480.192,1826.138 1480.192,1924.438C1480.192,1959.34 1470.131,1991.911 1452.754,2019.406C1451.246,2021.793 1449.682,2024.142 1448.065,2026.451L1416.701,2026.451C1418.739,2024.163 1420.71,2021.813 1422.61,2019.406C1443.236,1993.273 1455.551,1960.282 1455.551,1924.438C1455.551,1839.737 1386.785,1770.971 1302.084,1770.971C1217.383,1770.971 1148.617,1839.737 1148.617,1924.438C1148.617,1979.759 1177.951,2028.283 1221.901,2055.29C1229.642,2060.046 1237.836,2064.135 1246.403,2067.476C1263.668,2074.21 1282.448,2077.906 1302.084,2077.906C1317.52,2077.906 1332.426,2075.622 1346.484,2071.374C1348.857,2070.657 1351.205,2069.884 1353.529,2069.057L1353.529,2094.992C1351.2,2095.694 1348.851,2096.35 1346.484,2096.958C1332.288,2100.606 1317.411,2102.547 1302.084,2102.547C1282.642,2102.547 1263.923,2099.425 1246.403,2093.655C1237.938,2090.868 1229.753,2087.463 1221.901,2083.493Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.450987,0,0,0.450987,2158.74608,959.718427)\"><path d=\"M1174.633,2086.139C1126.852,2048.415 1096.164,1989.982 1096.164,1924.438C1096.164,1810.788 1188.433,1718.518 1302.084,1718.518C1415.735,1718.518 1508.005,1810.788 1508.005,1924.438C1508.005,1984.046 1482.623,2037.773 1442.087,2075.39C1438.119,2079.072 1434.006,2082.6 1429.757,2085.964C1429.493,2086.172 1429.229,2086.38 1428.965,2086.588L1426.254,2086.588C1415.009,2086.588 1404.225,2091.055 1396.273,2099.006C1394.272,2101.007 1392.492,2103.187 1390.948,2105.509C1389.608,2107.524 1388.447,2109.645 1387.473,2111.848C1383.034,2113.876 1378.511,2115.751 1373.91,2117.466C1351.543,2125.802 1327.341,2130.359 1302.084,2130.359C1270.41,2130.359 1240.396,2123.192 1213.578,2110.393C1199.665,2103.753 1186.611,2095.597 1174.633,2086.139ZM1429.757,2031.663C1454.142,2002.665 1468.838,1965.254 1468.838,1924.438C1468.838,1832.404 1394.118,1757.685 1302.084,1757.685C1210.05,1757.685 1135.33,1832.404 1135.33,1924.438C1135.33,1965.378 1150.115,2002.891 1174.633,2031.926C1185.765,2045.11 1198.905,2056.546 1213.578,2065.76C1239.234,2081.872 1269.579,2091.192 1302.084,2091.192C1334.74,2091.192 1365.216,2081.785 1390.948,2065.535C1405.574,2056.298 1418.667,2044.85 1429.757,2031.663Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.450987,0,0,0.450987,2158.74608,959.718427)\"><path d=\"M1302.084,1796.766C1372.549,1796.766 1429.757,1853.974 1429.757,1924.438C1429.757,1994.903 1372.549,2052.111 1302.084,2052.111C1231.62,2052.111 1174.411,1994.903 1174.411,1924.438C1174.411,1853.974 1231.62,1796.766 1302.084,1796.766ZM1302.084,1835.932C1253.236,1835.932 1213.578,1875.59 1213.578,1924.438C1213.578,1973.286 1253.236,2012.945 1302.084,2012.945C1350.932,2012.945 1390.59,1973.286 1390.59,1924.438C1390.59,1875.59 1350.932,1835.932 1302.084,1835.932Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.450987,0,0,0.450987,2158.74608,959.718427)\"><path d=\"M1302.084,1875.65C1329.011,1875.65 1350.873,1897.511 1350.873,1924.438C1350.873,1951.365 1329.011,1973.227 1302.084,1973.227C1275.157,1973.227 1253.296,1951.365 1253.296,1924.438C1253.296,1897.511 1275.157,1875.65 1302.084,1875.65ZM1302.084,1914.816C1296.774,1914.816 1292.462,1919.128 1292.462,1924.438C1292.462,1929.749 1296.774,1934.06 1302.084,1934.06C1307.395,1934.06 1311.706,1929.749 1311.706,1924.438C1311.706,1919.128 1307.395,1914.816 1302.084,1914.816Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,1096.460286,1529.397747)\"><rect x=\"2817.06\" y=\"1726.678\" width=\"28.851\" height=\"232.232\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,1131.268945,1529.397747)\"><path d=\"M2845.91,1802.02L2845.91,1958.909L2817.06,1958.909L2817.06,1726.678C2827.566,1749.871 2837.223,1775.075 2845.91,1802.02Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,893.580549,1529.397747)\"><path d=\"M2845.91,1726.677L2845.91,1958.909L2817.06,1958.909L2817.06,1802.02C2825.747,1775.075 2835.404,1749.87 2845.91,1726.677Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,928.389209,1529.397747)\"><path d=\"M2845.91,1631.443L2845.91,1958.909L2817.06,1958.909L2817.06,1672.985C2826.243,1657.749 2835.878,1643.86 2845.91,1631.443Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.612238,0,0,0.561243,928.869188,932.550613)\"><rect x=\"2874.077\" y=\"1602.52\" width=\"28.688\" height=\"388.772\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.612238,0,0,0.612238,991.074349,850.829465)\"><path d=\"M2960.404,1861.197L2960.404,1958.909L2931.817,1958.909L2931.817,1847.259C2932.954,1848.969 2934.265,1850.575 2935.739,1852.049C2941.596,1857.906 2949.54,1861.197 2957.823,1861.197L2960.404,1861.197ZM2960.404,1602.52L2960.404,1714.874L2957.823,1714.874C2949.54,1714.874 2941.596,1718.165 2935.739,1724.022C2934.265,1725.496 2932.954,1727.102 2931.817,1728.812L2931.817,1602.52L2960.404,1602.52Z\" style=\"fill:rgb(27,158,90);\"/></g><g transform=\"matrix(0.716846,0,0,0.716846,2115.245621,448.089315)\"><path d=\"M1151.414,2019.406C1134.037,1991.911 1123.976,1959.34 1123.976,1924.438C1123.976,1826.138 1203.784,1746.33 1302.084,1746.33C1400.385,1746.33 1480.192,1826.138 1480.192,1924.438C1480.192,1993.849 1440.402,2054.039 1382.406,2083.423C1374.582,2087.387 1366.425,2090.791 1357.991,2093.581C1340.405,2099.398 1321.609,2102.547 1302.084,2102.547C1294.067,2102.547 1286.173,2102.016 1278.435,2100.987C1276.072,2100.673 1273.723,2100.313 1271.39,2099.907L1271.39,2074.83C1273.72,2075.304 1276.068,2075.725 1278.435,2076.091C1286.144,2077.286 1294.042,2077.906 1302.084,2077.906C1321.806,2077.906 1340.664,2074.178 1357.991,2067.388C1366.528,2064.043 1374.693,2059.955 1382.406,2055.204C1426.279,2028.181 1455.551,1979.701 1455.551,1924.438C1455.551,1839.737 1386.785,1770.971 1302.084,1770.971C1217.383,1770.971 1148.617,1839.737 1148.617,1924.438C1148.617,1960.282 1160.932,1993.273 1181.558,2019.406C1183.458,2021.813 1185.429,2024.163 1187.467,2026.451L1156.104,2026.451C1154.486,2024.142 1152.923,2021.793 1151.414,2019.406Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.450987,0,0,0.450987,2461.416298,959.718427)\"><path d=\"M1162.082,2075.39C1121.545,2037.773 1096.164,1984.046 1096.164,1924.438C1096.164,1810.788 1188.433,1718.518 1302.084,1718.518C1415.735,1718.518 1508.005,1810.788 1508.005,1924.438C1508.005,1989.881 1477.41,2048.234 1429.757,2085.964C1417.82,2095.415 1404.813,2103.572 1390.948,2110.222C1364.039,2123.128 1333.899,2130.359 1302.084,2130.359C1289.233,2130.359 1276.655,2129.179 1264.454,2126.922C1260.616,2126.212 1256.815,2125.396 1253.055,2124.476C1252.03,2114.889 1247.758,2105.887 1240.877,2099.006C1233.56,2091.689 1223.844,2087.322 1213.578,2086.672C1212.688,2086.616 1211.794,2086.588 1210.897,2086.588L1175.203,2086.588C1175.013,2086.438 1174.823,2086.289 1174.633,2086.139C1170.305,2082.722 1166.118,2079.136 1162.082,2075.39ZM1429.757,2031.663C1454.142,2002.665 1468.838,1965.254 1468.838,1924.438C1468.838,1832.404 1394.118,1757.685 1302.084,1757.685C1210.05,1757.685 1135.33,1832.404 1135.33,1924.438C1135.33,1965.378 1150.115,2002.891 1174.633,2031.926C1185.765,2045.11 1198.905,2056.546 1213.578,2065.76C1239.234,2081.872 1269.579,2091.192 1302.084,2091.192C1334.74,2091.192 1365.216,2081.785 1390.948,2065.535C1405.574,2056.298 1418.667,2044.85 1429.757,2031.663Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.450987,0,0,0.450987,2461.416298,959.718427)\"><path d=\"M1302.084,1796.766C1372.549,1796.766 1429.757,1853.974 1429.757,1924.438C1429.757,1994.903 1372.549,2052.111 1302.084,2052.111C1231.62,2052.111 1174.411,1994.903 1174.411,1924.438C1174.411,1853.974 1231.62,1796.766 1302.084,1796.766ZM1302.084,1835.932C1253.236,1835.932 1213.578,1875.59 1213.578,1924.438C1213.578,1973.286 1253.236,2012.945 1302.084,2012.945C1350.932,2012.945 1390.59,1973.286 1390.59,1924.438C1390.59,1875.59 1350.932,1835.932 1302.084,1835.932Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.450987,0,0,0.450987,2461.416298,959.718427)\"><path d=\"M1302.084,1875.65C1329.011,1875.65 1350.873,1897.511 1350.873,1924.438C1350.873,1951.365 1329.011,1973.227 1302.084,1973.227C1275.157,1973.227 1253.296,1951.365 1253.296,1924.438C1253.296,1897.511 1275.157,1875.65 1302.084,1875.65ZM1302.084,1914.816C1296.774,1914.816 1292.462,1919.128 1292.462,1924.438C1292.462,1929.749 1296.774,1934.06 1302.084,1934.06C1307.395,1934.06 1311.706,1929.749 1311.706,1924.438C1311.706,1919.128 1307.395,1914.816 1302.084,1914.816Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,1399.130503,1529.397747)\"><path d=\"M2845.91,1672.985L2845.91,1958.909L2817.06,1958.909L2817.06,1631.443C2827.091,1643.86 2836.727,1657.75 2845.91,1672.985Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,1433.939162,1529.397747)\"><path d=\"M2845.91,1802.02L2845.91,1958.909L2817.06,1958.909L2817.06,1726.678C2827.566,1749.871 2837.223,1775.075 2845.91,1802.02Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,1196.250767,1529.397747)\"><path d=\"M2845.91,1726.677L2845.91,1958.909L2817.06,1958.909L2817.06,1802.02C2825.747,1775.075 2835.404,1749.87 2845.91,1726.677Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.612238,0,0,0.266945,1231.059426,1529.397747)\"><rect x=\"2817.06\" y=\"1726.677\" width=\"28.85\" height=\"232.232\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.612238,0,0,0.561243,1231.539405,932.550613)\"><path d=\"M2902.765,1884.632L2902.765,1991.291L2874.077,1991.291L2874.077,1884.7L2900.791,1884.701C2901.451,1884.701 2902.11,1884.678 2902.765,1884.632ZM2874.077,1725.083L2874.077,1602.52L2902.765,1602.52L2902.765,1725.151C2902.11,1725.106 2901.451,1725.083 2900.791,1725.083L2874.077,1725.083Z\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.612238,0,0,0.612238,1293.744566,850.829465)\"><rect x=\"2931.817\" y=\"1602.52\" width=\"28.587\" height=\"356.39\" style=\"fill:rgb(215,38,61);\"/></g><g transform=\"matrix(0.526966,0,0,0.526966,1497.628118,702.742774)\"><path d=\"M2435.864,2307.524L2439.704,2289.534L2459.047,2273.341L2484.791,2268.007L2554.574,2270.564L2859.097,2267.591L2882.577,2273.341L2902.332,2287.545L2906.568,2306.792L2906.651,2389.449L2905.759,2415.307L2893.276,2438.807L2868.341,2449.189L2472.124,2447.406L2445.774,2435.814L2437.053,2418.724L2433.784,2354.51L2435.864,2307.524Z\" style=\"fill:rgb(238,229,206);\"/></g><g transform=\"matrix(3.854705,0,0,3.854705,-951.135967,-2569.778572)\"><g transform=\"matrix(0.526966,0,0,0.526966,975.330654,1180.783313)\"><text x=\"0px\" y=\"0px\" style=\"font-family:'Space Grotesk', sans-serif;font-weight:500;font-size:50px;fill:rgb(31,31,31);\">H2H</text></g></g><g transform=\"matrix(0.417448,0,0,0.526966,2406.821194,776.928454)\"><path d=\"M1438.966,2123.028C1454.323,2123.028 1469.051,2127.861 1479.909,2136.463C1490.768,2145.065 1496.869,2156.731 1496.869,2168.897L1496.869,2266.326C1496.869,2278.491 1490.768,2290.158 1479.909,2298.76C1469.051,2307.362 1454.323,2312.195 1438.966,2312.195L946.576,2312.195C931.219,2312.195 916.491,2307.362 905.633,2298.76C894.774,2290.158 888.673,2278.491 888.673,2266.326L888.673,2168.897C888.673,2156.731 894.774,2145.065 905.633,2136.463C916.491,2127.861 931.219,2123.028 946.576,2123.028L1438.966,2123.028ZM1438.966,2132.611L946.576,2132.611C934.428,2132.611 922.777,2136.434 914.187,2143.239C905.597,2150.044 900.771,2159.273 900.771,2168.897L900.771,2266.326C900.771,2275.95 905.597,2285.179 914.187,2291.984C922.777,2298.788 934.428,2302.611 946.576,2302.611L1438.966,2302.611C1451.114,2302.611 1462.765,2298.788 1471.355,2291.984C1479.945,2285.179 1484.771,2275.95 1484.771,2266.326L1484.771,2168.897C1484.771,2159.273 1479.945,2150.044 1471.355,2143.239C1462.765,2136.434 1451.114,2132.611 1438.966,2132.611Z\" style=\"fill:rgb(238,229,206);\"/></g></g></svg>";
+const ICO_SEARCH = "<svg class=\"ico\" aria-hidden=\"true\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"824.3 508.9 151.5 182.3\"><g id=\"lupa\"><g transform=\"matrix(0.199435,-0.115144,0.115144,0.199435,410.190469,342.182751)\"><path d=\"M1302.084,1718.518C1415.735,1718.518 1508.005,1810.788 1508.005,1924.438C1508.005,2038.089 1415.735,2130.359 1302.084,2130.359C1188.433,2130.359 1096.164,2038.089 1096.164,1924.438C1096.164,1810.788 1188.433,1718.518 1302.084,1718.518ZM1302.084,1757.685C1210.05,1757.685 1135.33,1832.404 1135.33,1924.438C1135.33,2016.472 1210.05,2091.192 1302.084,2091.192C1394.118,2091.192 1468.838,2016.472 1468.838,1924.438C1468.838,1832.404 1394.118,1757.685 1302.084,1757.685Z\" style=\"fill:currentColor;\"/></g><g transform=\"matrix(0.199435,-0.115144,0.115144,0.199435,410.190469,342.182751)\"><path d=\"M1302.084,1796.766C1372.549,1796.766 1429.757,1853.974 1429.757,1924.438C1429.757,1994.903 1372.549,2052.111 1302.084,2052.111C1231.62,2052.111 1174.411,1994.903 1174.411,1924.438C1174.411,1853.974 1231.62,1796.766 1302.084,1796.766ZM1302.084,1835.932C1253.236,1835.932 1213.578,1875.59 1213.578,1924.438C1213.578,1973.286 1253.236,2012.945 1302.084,2012.945C1350.932,2012.945 1390.59,1973.286 1390.59,1924.438C1390.59,1875.59 1350.932,1835.932 1302.084,1835.932Z\" style=\"fill:currentColor;\"/></g><g transform=\"matrix(0.199435,-0.115144,0.115144,0.199435,410.190469,342.182751)\"><path d=\"M1302.084,1875.65C1329.011,1875.65 1350.873,1897.511 1350.873,1924.438C1350.873,1951.365 1329.011,1973.227 1302.084,1973.227C1275.157,1973.227 1253.296,1951.365 1253.296,1924.438C1253.296,1897.511 1275.157,1875.65 1302.084,1875.65ZM1302.084,1914.816C1296.774,1914.816 1292.462,1919.128 1292.462,1924.438C1292.462,1929.749 1296.774,1934.06 1302.084,1934.06C1307.395,1934.06 1311.706,1929.749 1311.706,1924.438C1311.706,1919.128 1307.395,1914.816 1302.084,1914.816Z\" style=\"fill:currentColor;\"/></g><g transform=\"matrix(1,0,0,1,-358.462153,-2554.837992)\"><path d=\"M1281.32,3243.979L1259.269,3205.786C1262.396,3205.399 1265.514,3204.812 1268.606,3204.021L1284.602,3231.727L1319.976,3211.304L1303.969,3183.578C1306.189,3181.3 1308.248,3178.898 1310.139,3176.391L1332.201,3214.603L1324.461,3219.071L1289.087,3239.494L1281.32,3243.979Z\" style=\"fill:currentColor;\"/></g><g transform=\"matrix(1,0,0,1,-358.462153,-2554.837992)\"><path d=\"M1272.305,3192.135C1243.108,3202.837 1209.535,3191.335 1193.459,3163.491C1175.468,3132.33 1186.161,3092.424 1217.322,3074.433C1248.484,3056.442 1288.39,3067.135 1306.381,3098.296C1322.411,3126.061 1315.67,3160.767 1291.968,3180.729L1307.725,3208.021L1288.039,3219.387L1272.305,3192.135ZM1284.683,3186.049C1283.973,3186.496 1283.251,3186.931 1282.518,3187.355C1281.861,3187.734 1281.2,3188.1 1280.536,3188.454L1291.322,3207.136L1295.474,3204.739L1284.683,3186.049ZM1221.832,3082.244C1194.982,3097.746 1185.768,3132.131 1201.27,3158.981C1216.773,3185.832 1251.157,3195.045 1278.008,3179.543C1304.858,3164.041 1314.071,3129.656 1298.569,3102.806C1283.067,3075.955 1248.683,3066.742 1221.832,3082.244Z\" style=\"fill:currentColor;\"/></g></g></svg>";
+let h2hOpen = false, h2hKey = null, h2hFor = null;
+const H2H_A = '#1b9e5a', H2H_B = '#d7263d';
+function h2hPanelHtml(P){
+  if (h2hFor !== P.key){ h2hFor = P.key; h2hOpen = false; h2hKey = null; }
+  const others = allPlayers().filter(a => a.key !== P.key).sort((x,y) => (x.rank||1e9) - (y.rank||1e9) || x.name.localeCompare(y.name,'pl'));
+  return `<div class="h2hpanel ${h2hOpen ? 'open' : ''}" id="h2hPanel"><div class="h2hpanel-in">
+    <div class="small" style="margin-bottom:8px">Porównaj zawodnika <b>${esc(P.name)}</b> z:</div>
+    <div class="searchbox">${ICO_SEARCH}<input type="search" id="h2hSearch" placeholder="Szukaj rywala…" autocomplete="off" aria-label="Szukaj rywala"></div>
+    <div class="h2hlist" id="h2hList">${others.length ? others.map(a => `<button class="pcard" data-h2hpick="${esc(a.key)}" data-name="${esc(a.name.toLowerCase())}"><div class="pc-top"><span class="pc-name">${esc(a.name)}</span>${a.rank ? `<span class="pc-rank">#${a.rank}</span>` : ''}</div><div class="pc-meta">ELO ${eloInt(a.elo)} · ${legsWord(a.legs)}</div></button>`).join('') : '<div class="small">Nie ma jeszcze innych zawodników.</div>'}</div>
+    <div class="small" id="h2hNone" style="display:none;padding:8px 0">Nikt nie pasuje do wyszukiwania.</div>
+  </div></div>`;
+}
+function h2hCardHtml(P){
+  if (!h2hKey) return '';
+  const all = allPlayers();
+  const A = all.find(a => a.key === P.key), B = all.find(a => a.key === h2hKey);
+  if (!A || !B) return '';
+  const ra = profileData(A.key), rb = profileData(B.key);
+  // bezpośrednie legi
+  const common = [];
+  ST.legs.forEach(L => {
+    const pa = L.players.find(p => p.n.toLowerCase() === A.key), pb = L.players.find(p => p.n.toLowerCase() === B.key);
+    if (pa && pb) common.push({ L, pa, pb });
+  });
+  common.sort((x,y) => x.L.d < y.L.d ? 1 : -1);
+  const aW = common.filter(c => c.pa.pl < c.pb.pl).length, bW = common.filter(c => c.pb.pl < c.pa.pl).length;
+  const pA = 1 / (1 + Math.pow(10, (B.elo - A.elo) / 400));
+  // statystyki obok siebie
+  const f1 = v => v == null ? '–' : (Math.round(v * 10) / 10).toFixed(1);
+  const pctv = (a, b) => b ? a / b * 100 : null;
+  const rows = [
+    ['ELO', A.elo, B.elo, 'hi', v => eloInt(v)],
+    ['Najwyższe ELO', A.mElo ? A.peak : null, B.mElo ? B.peak : null, 'hi', v => v == null ? '–' : eloInt(v)],
+    ['Mecze', A.mElo, B.mElo, null, v => v],
+    ['Wygrane legi', ra.legs ? pctv(ra.w, ra.legs) : null, rb.legs ? pctv(rb.w, rb.legs) : null, 'hi', v => v == null ? '–' : Math.round(v) + '%'],
+    ['Śr. miejsce', A.mp ? A.avgPl : null, B.mp ? B.avgPl : null, 'lo', f1],
+    ['Średnia (3 lotki)', ra.dt ? ra.avg : null, rb.dt ? rb.avg : null, 'hi', f1],
+    ['Średnia 9 pierwszych', ra.f9 || null, rb.f9 || null, 'hi', f1],
+    ['Najwyższa tura', ra.bt || null, rb.bt || null, 'hi', v => v == null ? '–' : v],
+    ['Tury 100+', ra.legs ? ra.c100 + ra.c140 + ra.c180 : null, rb.legs ? rb.c100 + rb.c140 + rb.c180 : null, 'hi', v => v == null ? '–' : v],
+    ['Największy checkout', ra.co || null, rb.co || null, 'hi', v => v == null ? '–' : v],
+    ['Średni checkout', ra.coN ? ra.coSum / ra.coN : null, rb.coN ? rb.coSum / rb.coN : null, 'hi', f1],
+    ['Skuteczność na podwójnych', ra.dd ? pctv(ra.ddHit, ra.dd) : null, rb.dd ? pctv(rb.ddHit, rb.dd) : null, 'hi', v => v == null ? '–' : Math.round(v) + '%'],
+    ['Najkrótszy wygrany leg', ra.bestLeg ? ra.bestLeg.dt : null, rb.bestLeg ? rb.bestLeg.dt : null, 'lo', v => v == null ? '–' : v + ' lot.'],
+    ['Busty na leg', ra.detailed ? ra.busts / ra.detailed : null, rb.detailed ? rb.busts / rb.detailed : null, 'lo', v => v == null ? '–' : (Math.round(v * 10) / 10).toFixed(1)],
+  ];
+  const cmp = rows.map(([lab, va, vb, better, fmt]) => {
+    const both = va != null && vb != null;
+    let wa = false, wb = false;
+    if (both && better && va !== vb){ const aBetter = better === 'hi' ? va > vb : va < vb; wa = aBetter; wb = !aBetter; }
+    // dłuższy pasek = lepszy wynik (przy „mniej = lepiej” skala jest odwrócona)
+    const bar = (v, o) => {
+      if (v == null || typeof v !== 'number') return 0;
+      if (better === 'lo'){ if (v <= 0) return 100; const mn = o != null ? Math.min(v, o) : v; return Math.max(4, mn / v * 100); }
+      const mx = Math.max(Math.abs(v), o != null ? Math.abs(o) : 0);
+      return mx ? Math.max(4, Math.abs(v) / mx * 100) : 0;
+    };
+    const barA = bar(va, vb), barB = bar(vb, va);
+    return `<div class="cmp-row">
+      <div class="cmp-v a ${wa ? 'win' : ''}">${fmt(va)}</div>
+      <div class="cmp-mid"><div class="cmp-lab">${lab}</div><div class="cmp-bars"><span class="cb a"><i style="width:${barA.toFixed(1)}%"></i></span><span class="cb b"><i style="width:${barB.toFixed(1)}%"></i></span></div></div>
+      <div class="cmp-v b ${wb ? 'win' : ''}">${fmt(vb)}</div></div>`;
+  }).join('');
+  // wspólny wykres ELO
+  const st = eloState; let chart = '<div class="small">Brak meczów z rywalami.</div>';
+  const ha = st && st.hist.get(A.key) || [], hb = st && st.hist.get(B.key) || [];
+  if (ha.length || hb.length){
+    const mk = (h, nm) => h.length ? [{ x:h[0].idx - 0.5, y:h[0].b }].concat(h.map(e => ({ x:e.idx, y:e.a, tip:`${nm} · ${fmtDate(e.d)} · ${e.pl}/${e.np} miejsce · ${fmtD(e.dd)} → ${fmtElo(e.a)}` }))) : [];
+    const xs = ha.concat(hb).map(e => e.idx);
+    chart = eloLineChart([{ name:A.name, color:H2H_A, pts:mk(ha, A.name) }, { name:B.name, color:H2H_B, pts:mk(hb, B.name) }],
+      { xMin:Math.min(...xs) - 0.6, xMax:Math.max(...xs), left:fmtDate(st.matches[Math.min(...xs)].L.d), right:fmtDate(st.matches[Math.max(...xs)].L.d), aria:'ELO obu zawodników' });
+  }
+  const list = common.slice(0, 10).map(c => `<tr><td class="l">${fmtDate(c.L.d)}, ${fmtTime(c.L.d)}</td><td>${c.L.start} · ${c.L.np} gr.</td>
+      <td class="${c.pa.pl < c.pb.pl ? 'win' : ''}">${MEDAL[c.pa.pl-1] || ''} ${c.pa.pl}. ${c.pa.ed != null ? `<span class="${dCls(c.pa.ed)}">${fmtD(c.pa.ed)}</span>` : ''}</td>
+      <td class="${c.pb.pl < c.pa.pl ? 'win' : ''}">${MEDAL[c.pb.pl-1] || ''} ${c.pb.pl}. ${c.pb.ed != null ? `<span class="${dCls(c.pb.ed)}">${fmtD(c.pb.ed)}</span>` : ''}</td></tr>`).join('');
+  return `<div class="card h2hcard" id="h2hCard">
+    <div class="h2h-top">
+      <div class="h2h-p a"><span class="h2h-dot" style="background:${H2H_A}"></span><div><div class="h2h-name">${esc(A.name)}</div><div class="small">ELO ${eloInt(A.elo)}${A.rank ? ` · #${A.rank}` : ''}</div></div></div>
+      <div class="h2h-vs">${ICO_H2H}</div>
+      <div class="h2h-p b"><div><div class="h2h-name"><a class="plink" data-prof="${esc(B.key)}">${esc(B.name)}</a></div><div class="small">ELO ${eloInt(B.elo)}${B.rank ? ` · #${B.rank}` : ''}</div></div><span class="h2h-dot" style="background:${H2H_B}"></span></div>
+    </div>
+    <div class="h2h-sum">
+      <div class="h2h-score"><b class="sa">${aW}</b><span class="small">bilans w ${legsWord(common.length)}</span><b class="sb">${bW}</b></div>
+      <div class="duel2"><span style="width:${common.length ? (aW / common.length * 100).toFixed(1) : 50}%;background:${H2H_A}"></span><span style="flex:1;background:${common.length ? H2H_B : 'rgba(239,230,207,.15)'}"></span></div>
+      <div class="small" style="margin-top:8px">Szansa na wygraną w bezpośrednim pojedynku wg ELO: <b>${esc(A.name)} ${Math.round(pA * 100)}%</b> – <b>${esc(B.name)} ${Math.round((1 - pA) * 100)}%</b></div>
+    </div>
+    <div class="cmp">${cmp}</div>
+    <div class="sechead" style="margin-top:16px">ELO obu zawodników</div>${chart}
+    ${common.length ? `<div class="sechead" style="margin-top:16px">Wspólne legi</div><div class="tblwrap"><table class="tbl sm h2htbl"><tr><th class="l">Data</th><th>Gra</th><th><span class="h2h-dot sm" style="background:${H2H_A}"></span>${esc(A.name)}</th><th><span class="h2h-dot sm" style="background:${H2H_B}"></span>${esc(B.name)}</th></tr>${list}</table></div>${common.length > 10 ? `<div class="small" style="margin-top:6px">Pokazano 10 ostatnich z ${common.length}.</div>` : ''}` : '<div class="small" style="margin-top:12px">Ci zawodnicy nie grali jeszcze ze sobą.</div>'}
+    <div class="actions" style="margin-top:14px"><button class="btn" id="h2hSwap">⇄ Zamień strony</button><button class="btn" id="h2hOther">Inny rywal</button><button class="btn" id="h2hClose">✕ Zamknij porównanie</button></div>
+  </div>`;
+}
+function bindH2H(P){
+  const btn = $('prH2H'), panel = $('h2hPanel');
+  if (btn) btn.onclick = () => {
+    h2hOpen = !h2hOpen;
+    panel.classList.toggle('open', h2hOpen); btn.classList.toggle('on', h2hOpen);
+    if (h2hOpen) setTimeout(() => { try{ $('h2hSearch').focus({ preventScroll:true }); }catch(e){} }, 220);
+  };
+  const s = $('h2hSearch');
+  if (s) s.addEventListener('input', () => {
+    const q = s.value.trim().toLowerCase(); let n = 0;
+    $('h2hList').querySelectorAll('[data-h2hpick]').forEach(b => { const ok = !q || b.dataset.name.includes(q); b.style.display = ok ? '' : 'none'; if (ok) n++; });
+    $('h2hNone').style.display = n ? 'none' : '';
+  });
+  if (panel) panel.addEventListener('click', e => {
+    const b = e.target.closest('[data-h2hpick]'); if (!b) return;
+    h2hKey = b.dataset.h2hpick; h2hOpen = false; render();
+    setTimeout(() => { const c = $('h2hCard'); if (c) c.scrollIntoView({ behavior:'smooth', block:'start' }); }, 40);
+  });
+  $('profileView').querySelectorAll('[data-h2h]').forEach(b => b.onclick = () => {
+    h2hKey = b.dataset.h2h; h2hOpen = false; render();
+    setTimeout(() => { const c = $('h2hCard'); if (c) c.scrollIntoView({ behavior:'smooth', block:'start' }); }, 40);
+  });
+  const sw = $('h2hSwap'); if (sw) sw.onclick = () => { const a = P.key; profKey = h2hKey; h2hFor = h2hKey; h2hKey = a; h2hOpen = false; render(); };
+  const ot = $('h2hOther'); if (ot) ot.onclick = () => { h2hOpen = true; const p = $('h2hPanel'); p.classList.add('open'); $('prH2H').classList.add('on'); p.scrollIntoView({ behavior:'smooth', block:'center' }); setTimeout(() => { try{ $('h2hSearch').focus({ preventScroll:true }); }catch(e){} }, 220); };
+  const cl = $('h2hClose'); if (cl) cl.onclick = () => { h2hKey = null; render(); };
+}
+
 /* floating tooltip for charts */
 document.addEventListener('pointerover', e => {
   const t = e.target.closest && e.target.closest('[data-tip]');
   const f = $('tipf');
-  if (!t || !$('profileView').contains(t)){ f.classList.remove('show'); return; }
+  if (!t || !(t.closest('#profileView') || t.closest('#stats'))){ f.classList.remove('show'); return; }
   f.textContent = t.dataset.tip; f.classList.add('show');
 });
 document.addEventListener('pointermove', e => {
@@ -1029,7 +1352,7 @@ document.addEventListener('keydown', e => {
 
 /* ---------- BACKUP ---------- */
 function download(name, text){
-  const blob = new Blob([text], { type:'application/json' });
+  const blob = new Blob([text], { type: /\.csv$/i.test(name) ? 'text/csv;charset=utf-8' : 'application/json' });
   const url = URL.createObjectURL(blob);
   const el = document.createElement('a'); el.href = url; el.download = name;
   document.body.appendChild(el); el.click(); el.remove();

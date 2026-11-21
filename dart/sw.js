@@ -1,5 +1,5 @@
 // Dart – service worker: keeps the whole app available offline.
-const CACHE = 'dart-v14';
+const CACHE = 'dart-v18';
 const FILES = [
   './', './index.html', './style.css', './app.js', './manifest.webmanifest',
   './icons/logo.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
