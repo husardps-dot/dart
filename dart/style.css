@@ -83,6 +83,9 @@
   .modal.show{display:flex}
   .modal .card{max-width:380px;width:100%;text-align:center}
   .modal .disp{font-size:40px;margin:6px 0}
+  .ico.medal{height:1.5em;width:auto;vertical-align:-.45em;flex:none}
+  .modal .disp .ico.medal{height:1.25em;vertical-align:-.28em;margin-right:.12em}
+
   .small{font-size:13px;color:var(--muted)}
   .topbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
   .chips{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
