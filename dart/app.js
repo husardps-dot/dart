@@ -1041,7 +1041,7 @@ function renderProfile(){
   const h2h = [...r.h2h.values()].sort((a,b) => b.n - a.n);
   let h = `<div class="row" style="justify-content:space-between;margin-bottom:10px">
       <button class="btn" data-go="players">← Zawodnicy</button>
-      <div class="row"><button class="btn h2hbtn ${h2hOpen ? 'on' : ''}" id="prH2H" title="Porównaj z innym zawodnikiem (H2H)" aria-label="Porównanie H2H">${ICO_H2H}</button><button class="btn" id="prRename">✎ Zmień nazwę</button>${r.legs ? '<button class="btn" id="prWipe">Usuń statystyki</button>' : ''}<button class="btn danger" id="prDelete">Usuń zawodnika</button></div>
+      <div class="row pr-admin"><button class="btn sm" id="prRename">✎ Zmień nazwę</button><button class="btn sm danger" id="prDelete">Usuń zawodnika</button></div>
     </div>
     <div class="card prof-head">
       <div class="ph-av">${esc(P.name.slice(0,1).toUpperCase())}</div>
@@ -1049,7 +1049,10 @@ function renderProfile(){
         <div class="ph-name">${esc(P.name)}</div>
         <div class="small">${P.rank ? `#${P.rank} w rankingu · ELO ${eloInt(P.elo)} · ` : `ELO ${eloInt(P.elo)} · `}${r.legs ? `${legsWord(r.legs)} · gra od ${fmtDate(r.first)} · ostatnio ${fmtDate(r.last)}` : (P.added ? `dodany(a) ${fmtDate(P.added)} · ` : '') + 'jeszcze bez rozegranych legów'}</div>
       </div>
-      ${S.phase !== 'game' && !S.players.some(n => n.toLowerCase() === P.key) ? `<button class="btn primary" id="prToGame">+ Do następnej gry</button>` : ''}
+      <div class="ph-acts">
+        <button class="btn h2hbtn ${h2hOpen ? 'on' : ''}" id="prH2H" title="Porównaj z innym zawodnikiem" aria-label="Porównanie H2H">${ICO_H2H}<span>Porównaj</span></button>
+        ${S.phase !== 'game' && !S.players.some(n => n.toLowerCase() === P.key) ? `<button class="btn primary" id="prToGame">+ Do następnej gry</button>` : ''}
+      </div>
     </div>`;
   h += h2hPanelHtml(P) + h2hCardHtml(P);
   if (!r.legs){
@@ -1109,18 +1112,13 @@ function bindProfile(P){
       view = 'players'; wipePlayerStats(P.key, P.name, true);
     });
   };
-  const wipe = $('prWipe');
-  if (wipe) wipe.onclick = () => {
-    const n = ST.legs.filter(L => L.players.some(p => p.n.toLowerCase() === P.key)).length;
-    confirmBox(`Usunąć statystyki: ${P.name}?`, `Wyniki z ${legsWord(n)} zostaną usunięte, a zawodnik zostaje na liście. Pozostali gracze w tych legach zostają.`, 'Usuń', () => wipePlayerStats(P.key, P.name, false));
-  };
   const all = $('prAllLegs');
   if (all) all.onclick = () => { MF.p = P.key; MF.from = MF.to = ''; view = 'stats'; render(); setTimeout(() => $('manageCard').scrollIntoView({ behavior:'smooth' }), 30); };
   $('profileView').querySelectorAll('[data-prm]').forEach(b => b.onclick = () => {
     const L = ST.legs[+b.dataset.prm]; if (!L) return;
     mutate(`Usunięto leg z ${fmtDate(L.d)} ze statystyk: ${P.name}`, () => dropPlayer(L, P.key));
   });
-  ['prRename','prDelete','prWipe'].forEach(id => { const el = $(id); if (el && el.onclick){ const f = el.onclick; el.onclick = ev => requireAdmin(() => f.call(el, ev)); } });
+  ['prRename','prDelete'].forEach(id => { const el = $(id); if (el && el.onclick){ const f = el.onclick; el.onclick = ev => requireAdmin(() => f.call(el, ev)); } });
   $('profileView').querySelectorAll('[data-prm]').forEach(el => { const f = el.onclick; el.onclick = ev => requireAdmin(() => f.call(el, ev)); });
   const tg = $('prToGame');
   if (tg) tg.onclick = () => { if (!S.players.some(n => n.toLowerCase() === P.key)) S.players.push(P.name); save(); view = 'main'; render(); };
@@ -1394,6 +1392,11 @@ $('btnFull').onclick = () => {
 };
 if ('serviceWorker' in navigator && location.protocol !== 'file:'){
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  // after a new version takes over, reload once so the new files are used right away
+  if (navigator.serviceWorker.controller){
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded){ reloaded = true; location.reload(); } });
+  }
 }
 
 /* ---------- START ---------- */

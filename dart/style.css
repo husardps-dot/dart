@@ -274,8 +274,11 @@
   .echips{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:4px;font-size:14px}
   .echip{white-space:nowrap}
   .ehist{max-height:330px;overflow-y:auto}
-  .h2hbtn{padding:4px 10px;border-color:var(--text)}
-  .h2hbtn .h2hico{height:30px;width:auto}
+  .ph-acts{display:flex;gap:10px;flex-wrap:wrap;margin-left:auto}
+  .ph-acts .btn{min-height:44px}
+  .pr-admin{gap:8px}
+  .h2hbtn{display:inline-flex;align-items:center;gap:8px}
+  .h2hbtn .h2hico{height:26px;width:auto}
   .h2hbtn.on{background:rgba(239,230,207,.12);box-shadow:0 0 0 2px var(--text) inset}
   .h2hpanel{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s ease,margin .22s ease;margin-top:0}
   .h2hpanel.open{grid-template-rows:1fr;margin-top:12px}
@@ -317,7 +320,9 @@
     .h2h-vs .h2hico{height:32px}
     .h2h-score b{font-size:26px}
     .cmp-v{font-size:15px}
-    .h2hbtn .h2hico{height:24px}
+    .h2hbtn .h2hico{height:22px}
+    .ph-acts{width:100%;margin-left:0}
+    .ph-acts .btn{flex:1}
     .mults .btn{font-size:13px;padding:10px 2px}
     .btn .ico{height:18px}
     .btn{gap:7px}
